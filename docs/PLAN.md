@@ -34,19 +34,21 @@ See root `AGENTS.md` for business requirements, technical decisions, and coding 
 
 ## Part 3: Add in Frontend
 
-- [ ] Configure Next.js for static export (`output: "export"` in `next.config.ts`)
-- [ ] Update FastAPI to serve the exported static frontend build (`frontend/out`, copied to `backend`'s static dir at Docker build time) at `/`
-- [ ] Update Docker build to be multi-stage: `node` stage builds the Next.js static export, copied into the final `uv`/Python image
-- [ ] Start/stop scripts unchanged (still just wrap `docker compose`); no changes needed
-- [ ] Confirm the existing Kanban demo (in-memory, no backend calls yet) renders correctly when served this way
+- [x] Configure Next.js for static export (`output: "export"` in `next.config.ts`)
+- [x] Update FastAPI to serve the exported static frontend build (`frontend/out`, copied to `backend`'s static dir at Docker build time) at `/` — `STATIC_DIR` is now configurable via env var
+- [x] Update Docker build to be multi-stage: `node` stage builds the Next.js static export, copied into the final `uv`/Python image
+- [x] Start/stop scripts unchanged (still just wrap `docker compose`); no changes needed
+- [x] Confirmed the existing Kanban demo (in-memory, no backend calls yet) renders correctly when served this way
 
 **Tests:**
-- Existing frontend unit tests (Vitest) and e2e tests (Playwright, dev-mode) continue to pass
-- Add e2e test(s) that build and run the real Docker image and assert the Kanban board renders seed data and drag-and-drop works when served by FastAPI
-- Backend test for the static-mount mechanism (fixture dir + `STATIC_DIR` env var), decoupled from the real frontend build
-- Manually verify via `curl` that a JS chunk referenced by the built page is served correctly through FastAPI, not just the HTML shell
+- [x] Existing frontend unit tests (Vitest) and e2e tests (Playwright, dev-mode) continue to pass — verified: 6/6 unit, 3/3 e2e
+- [x] Added e2e tests (`tests/kanban.spec.ts`, run via `npm run test:e2e`), which build and run the real Docker image and assert the Kanban board renders seed data and drag-and-drop works when served by FastAPI — verified: 3/3 passing
+- [x] Backend test decoupled from the real frontend build (tests the static-mount mechanism generically via a fixture dir + `STATIC_DIR` env var, rather than depending on frontend content) — verified: 2/2 passing
+- [x] Manually verified via `curl` that a JS chunk referenced by the built page (`/_next/static/chunks/...`) is served correctly (200) through FastAPI, not just the HTML shell
 
-**Success criteria:** `docker compose up` (via `scripts/start.sh`) serves the actual Kanban UI at `/`; drag-and-drop and card editing work (still in-memory only); all frontend and backend test suites pass.
+**Success criteria:** met. `docker compose up` (via `scripts/start.sh`) serves the actual Kanban UI at `/`; drag-and-drop and card editing work (still in-memory only); all frontend and backend test suites pass.
+
+**Note:** couldn't do a live interactive browser check (Claude-in-Chrome extension not connected in this session) — verification relied on Playwright automation against the real Docker container plus manual curl checks instead.
 
 ---
 

@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-test("loads the kanban board", async ({ page }) => {
+test("kanban board renders with seed data when served by FastAPI", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
   await expect(page.locator('[data-testid^="column-"]')).toHaveCount(5);
+  await expect(page.getByText("Align roadmap themes")).toBeVisible();
 });
 
 test("adds a card to a column", async ({ page }) => {
@@ -16,7 +17,7 @@ test("adds a card to a column", async ({ page }) => {
   await expect(firstColumn.getByText("Playwright card")).toBeVisible();
 });
 
-test("moves a card between columns", async ({ page }) => {
+test("moves a card between columns on the static build", async ({ page }) => {
   await page.goto("/");
   const card = page.getByTestId("card-card-1");
   const targetColumn = page.getByTestId("column-col-review");
