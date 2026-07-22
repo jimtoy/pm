@@ -1,6 +1,58 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+const authenticate = async (page: Page) => {
+  const response = await page.request.post("/api/login", {
+    data: { username: "user", password: "password" },
+  });
+  expect(response.ok()).toBeTruthy();
+};
+
+test("redirects to /login when not authenticated", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login/);
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByText("Kanban Studio")).toHaveCount(0);
+});
+
+test("shows an error for invalid credentials", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("user");
+  await page.getByLabel("Password").fill("wrong-password");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByText(/invalid username or password/i)).toBeVisible();
+  await expect(page).toHaveURL(/\/login/);
+});
+
+test("logs in with correct credentials and shows the board", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("user");
+  await page.getByLabel("Password").fill("password");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page).toHaveURL(/^(?!.*\/login).*$/);
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+});
+
+test("already-authenticated users hitting /login are redirected to the board", async ({ page }) => {
+  await authenticate(page);
+  await page.goto("/login");
+  await expect(page).toHaveURL(/^(?!.*\/login).*$/);
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+});
+
+test("logs out and re-blocks access to the board", async ({ page }) => {
+  await authenticate(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+
+  await page.getByRole("button", { name: /log out/i }).click();
+  await expect(page).toHaveURL(/\/login/);
+
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login/);
+});
 
 test("kanban board renders with seed data when served by FastAPI", async ({ page }) => {
+  await authenticate(page);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
   await expect(page.locator('[data-testid^="column-"]')).toHaveCount(5);
@@ -8,6 +60,7 @@ test("kanban board renders with seed data when served by FastAPI", async ({ page
 });
 
 test("adds a card to a column", async ({ page }) => {
+  await authenticate(page);
   await page.goto("/");
   const firstColumn = page.locator('[data-testid^="column-"]').first();
   await firstColumn.getByRole("button", { name: /add a card/i }).click();
@@ -18,6 +71,7 @@ test("adds a card to a column", async ({ page }) => {
 });
 
 test("moves a card between columns on the static build", async ({ page }) => {
+  await authenticate(page);
   await page.goto("/");
   const card = page.getByTestId("card-card-1");
   const targetColumn = page.getByTestId("column-col-review");

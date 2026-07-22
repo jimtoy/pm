@@ -54,17 +54,19 @@ See root `AGENTS.md` for business requirements, technical decisions, and coding 
 
 ## Part 4: Add in a fake user sign in experience
 
-- [ ] Add a login page/form requiring username `user` / password `password` (hardcoded per AGENTS.md)
-- [ ] On success, set a session (simple signed cookie or server-side session token — no need for JWT complexity or expiry logic given MVP scope) so refreshing stays logged in
-- [ ] Redirect unauthenticated requests for the Kanban view to the login page; redirect authenticated users hitting login to the board
-- [ ] Add a logout action that clears the session and redirects to login
-- [ ] Backend: add `/api/login`, `/api/logout`, and session-check middleware/dependency protecting Kanban-related routes (routes don't exist yet until Part 6, but the auth dependency should exist now for reuse)
+- [x] Add a login page/form requiring username `user` / password `password` (hardcoded per AGENTS.md)
+- [x] On success, set a session (simple signed cookie or server-side session token — no need for JWT complexity or expiry logic given MVP scope) so refreshing stays logged in
+- [x] Redirect unauthenticated requests for the Kanban view to the login page; redirect authenticated users hitting login to the board
+- [x] Add a logout action that clears the session and redirects to login
+- [x] Backend: add `/api/login`, `/api/logout`, and session-check middleware/dependency protecting Kanban-related routes (routes don't exist yet until Part 6, but the auth dependency should exist now for reuse)
 
 **Tests:**
-- Backend unit tests: correct credentials succeed and set a session cookie; incorrect credentials return 401; protected route without session returns 401/redirect; logout clears session
-- Frontend/e2e: cannot reach board content without logging in; login with correct credentials shows the board; wrong credentials shows an error; logout returns to login and re-blocks access
+- [x] Backend unit tests: correct credentials succeed and set a session cookie; incorrect credentials return 401; protected route without session returns 401/redirect; logout clears session — verified: 8/8 passing (`backend/tests/test_auth.py` + `test_hello.py`)
+- [x] Frontend/e2e: cannot reach board content without logging in; login with correct credentials shows the board; wrong credentials shows an error; logout returns to login and re-blocks access — verified: 8/8 Playwright e2e passing against the real Docker build; 11/11 Vitest unit tests passing
 
-**Success criteria:** a fresh browser session is forced to log in before seeing the Kanban board; logout works; all new tests pass alongside existing ones.
+**Success criteria:** met. A fresh browser session is forced to log in before seeing the Kanban board; logout works; all new tests pass alongside existing ones.
+
+**Note:** manual live-browser click-through was attempted via the Claude-in-Chrome extension but blocked by a password-manager autofill popup stealing tab focus (unrelated to the app). Verification instead relied on the full automated suite above plus a partial manual check (fresh-tab unauthenticated redirect to `/login`, and logout redirecting back to `/login`), both confirmed working.
 
 ---
 
