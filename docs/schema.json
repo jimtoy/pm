@@ -1,0 +1,44 @@
+{
+  "tables": {
+    "users": {
+      "description": "Account able to sign in. MVP has exactly one row (username/password hardcoded per AGENTS.md), but the table exists so multiple users are possible later.",
+      "columns": {
+        "id": { "type": "INTEGER", "primaryKey": true, "autoincrement": true },
+        "username": { "type": "TEXT", "unique": true, "nullable": false },
+        "password_hash": { "type": "TEXT", "nullable": false }
+      }
+    },
+    "boards": {
+      "description": "A Kanban board owned by a user. MVP creates exactly one per user.",
+      "columns": {
+        "id": { "type": "INTEGER", "primaryKey": true, "autoincrement": true },
+        "user_id": { "type": "INTEGER", "nullable": false, "foreignKey": "users.id" },
+        "name": { "type": "TEXT", "nullable": false }
+      }
+    },
+    "board_columns": {
+      "description": "A column on a board (e.g. Backlog, In Progress). Named board_columns, not columns, to avoid the reserved-word collision.",
+      "columns": {
+        "id": { "type": "INTEGER", "primaryKey": true, "autoincrement": true },
+        "board_id": { "type": "INTEGER", "nullable": false, "foreignKey": "boards.id" },
+        "title": { "type": "TEXT", "nullable": false },
+        "position": { "type": "INTEGER", "nullable": false, "description": "0-based order of this column within its board" }
+      }
+    },
+    "cards": {
+      "description": "A card belonging to a column.",
+      "columns": {
+        "id": { "type": "INTEGER", "primaryKey": true, "autoincrement": true },
+        "column_id": { "type": "INTEGER", "nullable": false, "foreignKey": "board_columns.id" },
+        "title": { "type": "TEXT", "nullable": false },
+        "details": { "type": "TEXT", "nullable": false, "default": "" },
+        "position": { "type": "INTEGER", "nullable": false, "description": "0-based order of this card within its column" }
+      }
+    }
+  },
+  "relationships": [
+    "users.id -> boards.user_id (one user has many boards; MVP: exactly one)",
+    "boards.id -> board_columns.board_id (one board has many columns)",
+    "board_columns.id -> cards.column_id (one column has many cards)"
+  ]
+}
