@@ -68,14 +68,22 @@ See root `AGENTS.md` for business requirements, technical decisions, and coding 
 
 **Note:** manual live-browser click-through was attempted via the Claude-in-Chrome extension but blocked by a password-manager autofill popup stealing tab focus (unrelated to the app). Verification instead relied on the full automated suite above plus a partial manual check (fresh-tab unauthenticated redirect to `/login`, and logout redirecting back to `/login`), both confirmed working.
 
+**Follow-up review (after Part 6).** Re-verified against the running Docker build; no regressions (11/11 Vitest, 8/8 Playwright, backend green). Findings:
+
+- *Test gap closed.* Auth was only *proven* for `GET /api/board` — the other four board routes relied on the router-level `dependencies=[Depends(require_auth)]` with nothing asserting it, so the protection could be silently lost. Added parametrized coverage for all five routes plus a test that rejected requests leave the board unmutated. Confirmed load-bearing: removing the dependency fails exactly those 6 tests.
+- *Auth itself is sound.* Manually probed every route unauthenticated (all 401, nothing mutated). Session cookie is signed, `httponly`, `samesite=lax`, and correctly expired on logout.
+- *Redirect is client-side by design.* Because the frontend is a static export, Next.js middleware does not run and `GET /` returns 200 with the HTML shell to anonymous users — the only "Kanban Studio" text in it is the `<title>` tag, not board content, so the e2e assertion is valid. The real security boundary is the API, which is correctly enforced. Worth stating plainly so "cannot reach board content without logging in" is not read as server-side route protection.
+- *Seed data is currently public.* The demo cards are compiled into a JS chunk that anyone can fetch without a session. This is inherent to Part 4's in-memory demo and resolves itself in Part 7, when board data moves behind `GET /api/board`.
+- *`SESSION_SECRET` is unset in Docker*, so the hardcoded default is used. Not worth fixing for this MVP: the credentials are themselves hardcoded and displayed on the login page, so forging a cookie gains nothing over logging in.
+
 ---
 
 ## Part 5: Database modeling
 
-- [ ] Propose a schema (tables: `users`, `boards`, `columns`, `cards`, with foreign keys and ordering columns for column/card sequence) even though MVP only needs one user and one board — schema should support multiple users/boards for the future per AGENTS.md limitations
-- [ ] Save the schema as JSON (e.g. `docs/schema.json`) describing tables, columns, types, and relationships
-- [ ] Write `docs/DATABASE.md` documenting the approach: SQLite, file location, migration/creation-on-first-run strategy, how ordering of columns/cards is stored (e.g. integer `position` field vs array-of-ids)
-- [ ] Get explicit user sign-off on the schema before implementing it in Part 6
+- [x] Propose a schema (tables: `users`, `boards`, `columns`, `cards`, with foreign keys and ordering columns for column/card sequence) even though MVP only needs one user and one board — schema should support multiple users/boards for the future per AGENTS.md limitations
+- [x] Save the schema as JSON (e.g. `docs/schema.json`) describing tables, columns, types, and relationships
+- [x] Write `docs/DATABASE.md` documenting the approach: SQLite, file location, migration/creation-on-first-run strategy, how ordering of columns/cards is stored (e.g. integer `position` field vs array-of-ids)
+- [x] Get explicit user sign-off on the schema before implementing it in Part 6
 
 **Tests:** none (design-only part), but schema JSON should be valid JSON (lint-checked).
 
@@ -85,17 +93,25 @@ See root `AGENTS.md` for business requirements, technical decisions, and coding 
 
 ## Part 6: Backend
 
-- [ ] Implement SQLite database using the approved schema; create the DB file and tables automatically if the file doesn't exist on startup
-- [ ] Add API routes (all behind the auth dependency from Part 4): `GET /api/board` (fetch current user's board with columns+cards), `PATCH /api/columns/{id}` (rename), `POST /api/cards`, `PATCH /api/cards/{id}` (edit/move), `DELETE /api/cards/{id}`
-- [ ] Seed the database with the same demo data currently hardcoded in `frontend/src/lib/kanban.ts` on first run, so behavior matches today's demo
-- [ ] Backend unit tests using a temporary/in-memory SQLite DB per test (not the real dev DB)
+- [x] Implement SQLite database using the approved schema; create the DB file and tables automatically if the file doesn't exist on startup
+- [x] Add API routes (all behind the auth dependency from Part 4): `GET /api/board` (fetch current user's board with columns+cards), `PATCH /api/columns/{id}` (rename), `POST /api/cards`, `PATCH /api/cards/{id}` (edit/move), `DELETE /api/cards/{id}`
+- [x] Seed the database with the same demo data currently hardcoded in `frontend/src/lib/kanban.ts` on first run, so behavior matches today's demo
+- [x] Backend unit tests using a temporary/in-memory SQLite DB per test (not the real dev DB)
 
 **Tests:**
-- CRUD coverage: create card, rename column, move card between columns, move card within a column (reorder), delete card, fetch full board
-- Edge cases: fetching board with no data yet (first run auto-seeds), invalid ids return 404, unauthenticated requests return 401
-- DB-creation test: deleting the DB file and starting the app recreates it with seed data
+- [x] CRUD coverage: create card, rename column, move card between columns, move card within a column (reorder), delete card, fetch full board — verified: `backend/tests/test_board.py`
+- [x] Edge cases: fetching board with no data yet (first run auto-seeds), invalid ids return 404, unauthenticated requests return 401
+- [x] DB-creation test: deleting the DB file and starting the app recreates it with seed data; a second startup against an existing DB does not re-seed over edits
+- [x] Full suite: 22/22 passing (`uv run pytest`)
+- [x] Schema conformance: `docs/schema.json` diffed programmatically against the SQLite tables the code actually creates — all tables, column types, nullability, primary keys, foreign keys, and the `users.username` unique index match
 
-**Success criteria:** all backend routes work correctly via `pytest` + `TestClient` against a real (temp) SQLite file, matching the schema from Part 5.
+**Success criteria:** met. All backend routes work correctly via `pytest` + `TestClient` against a real (temp) SQLite file, matching the schema from Part 5. Also verified against the real Docker build: renamed a column and added a card, ran `scripts/stop.sh` + `scripts/start.sh`, and confirmed both changes persisted; `docker compose down -v` resets to seed data.
+
+**Two issues found in a follow-up review and fixed:**
+1. *Data loss across restarts.* `docker-compose.yml` had no volume for `/app/data`, so the SQLite file lived in the container's writable layer and was destroyed by `stop.sh` (`docker compose down`) — every stop/start silently reset the board. Fixed with an `app-data` named volume; verified by round-tripping real edits through a full stop/start cycle.
+2. *Untested startup path + per-request waste.* `init_db()` was being called from the per-request `get_db()` dependency, so the schema script ran on every API request, and the documented "created on startup" path was never exercised by tests (a bare `TestClient(app)` does not run lifespan events, which was masking this). Removed the per-request call; tests now use `with TestClient(app)` so they cover the real production path, plus a `conftest.py` autouse fixture guarantees no test can touch the dev DB.
+
+**Note:** the local `uv` CLI wasn't on PATH in this environment, so tests were run inside a throwaway `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` container (`docker run -v backend:/app ... uv run pytest`) rather than natively; a stale `.venv` left over from a previous container build (broken interpreter symlink) was removed and resynced first.
 
 ---
 
@@ -112,6 +128,10 @@ See root `AGENTS.md` for business requirements, technical decisions, and coding 
 - Backend tests from Part 6 still passing
 
 **Success criteria:** reloading the browser preserves all board changes; e2e test suite exercises the full persistent loop end-to-end against the real backend (not mocks) using a test DB.
+
+**Carried over from the Part 4/6 review — handle in this part:**
+- E2E tests now run against a *persistent* `app-data` volume. Today that is harmless (the board is in-memory, so e2e mutations touch nothing), but once the board is server-backed, tests like "adds a card" will mutate real state and leak between runs, making the suite order-dependent. Point the e2e container at a throwaway DB (override `DB_PATH` or use a disposable volume) as part of wiring the frontend up.
+- The existing e2e tests address cards/columns by the frontend's hardcoded ids (`card-card-1`, `column-col-review`). The backend issues integer ids (`"1"`, `"2"`), so these selectors must be updated when the board starts loading from `/api/board`.
 
 ---
 

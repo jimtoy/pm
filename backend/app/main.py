@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -6,11 +7,24 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import router as auth_router
+from app.board import router as board_router
+from app.db import connect, init_db
 
 DEFAULT_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", DEFAULT_STATIC_DIR))
 
-app = FastAPI(title="Project Management MVP")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    conn = connect()
+    try:
+        init_db(conn)
+    finally:
+        conn.close()
+    yield
+
+
+app = FastAPI(title="Project Management MVP", lifespan=lifespan)
 
 app.add_middleware(
     SessionMiddleware,
@@ -19,6 +33,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(board_router)
 
 
 @app.get("/api/hello")
