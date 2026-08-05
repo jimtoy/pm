@@ -28,10 +28,16 @@ describe("Home", () => {
   });
 
   it("renders the board when authenticated", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ authenticated: true }),
-    });
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ authenticated: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ columns: [], cards: {} }),
+      });
 
     render(<Home />);
 

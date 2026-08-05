@@ -1,6 +1,6 @@
 # Frontend (Kanban Studio)
 
-Next.js 16 / React 19 / TypeScript / Tailwind CSS 4 app. Currently a frontend-only demo with in-memory state (no backend, no persistence, no auth) — this is the starting point for the full project described in the root `AGENTS.md`.
+Next.js 16 / React 19 / TypeScript / Tailwind CSS 4 app. Session-authenticated, backend-persisted Kanban board — data is fetched from and saved to the FastAPI backend (see root `AGENTS.md` for the full MVP spec; AI chat sidebar is still pending, Part 10 of `docs/PLAN.md`).
 
 ## Stack
 
@@ -13,15 +13,18 @@ Next.js 16 / React 19 / TypeScript / Tailwind CSS 4 app. Currently a frontend-on
 ## Structure
 
 - `src/app/layout.tsx` — root layout, loads fonts, sets metadata
-- `src/app/page.tsx` — renders `<KanbanBoard />` at `/`
-- `src/components/KanbanBoard.tsx` — top-level stateful component; owns `BoardData` state, drag sensors, and all mutation handlers (rename column, add/delete card, move card)
-- `src/components/KanbanColumn.tsx` — one column: droppable zone, renamable title input, card list, `NewCardForm`
+- `src/app/page.tsx` — checks the session (`fetchSession`), redirects to `/login` if unauthenticated, otherwise renders `<KanbanBoard />` with `onLogout`/`onSessionExpired` callbacks
+- `src/app/login/page.tsx` — login form; redirects to `/` if already authenticated
+- `src/components/KanbanBoard.tsx` — top-level stateful component; fetches the board from `/api/board` on mount, owns `BoardData` state, drag sensors, loading/error states, and all mutation handlers (rename column, add/delete card, move card)
+- `src/components/KanbanColumn.tsx` — one column: droppable zone, renamable title input (commits on blur/Enter, not per keystroke), card list, `NewCardForm`
 - `src/components/KanbanCard.tsx` — one draggable/sortable card with a delete button
 - `src/components/KanbanCardPreview.tsx` — static (non-interactive) card render used in `DragOverlay` while dragging
-- `src/components/NewCardForm.tsx` — inline expand/collapse form for adding a card to a column
-- `src/lib/kanban.ts` — data model (`Card`, `Column`, `BoardData`), `initialData` seed, `moveCard` (pure reducer-style logic for drag-and-drop reordering across/within columns), `createId` helper
+- `src/components/NewCardForm.tsx` — inline expand/collapse form for adding a card to a column; stays open with the user's input if the API call fails
+- `src/lib/kanban.ts` — data model (`Card`, `Column`, `BoardData`) and `moveCard`, the pure reducer-style logic for drag-and-drop reordering, reused for the optimistic local update before the server confirms
+- `src/lib/auth.ts` — `fetchSession`/`login`/`logout`, calling `/api/session`, `/api/login`, `/api/logout`
+- `src/lib/api.ts` — board API client (`fetchBoard`, `renameColumn`, `createCard`, `moveCard`, `deleteCard`); throws `UnauthorizedError` on a 401 response so callers can redirect to login instead of showing an error banner
 
-## Data model (current, in-memory only)
+## Data model
 
 ```ts
 type Card = { id: string; title: string; details: string };
@@ -29,13 +32,13 @@ type Column = { id: string; title: string; cardIds: string[] };
 type BoardData = { columns: Column[]; cards: Record<string, Card> };
 ```
 
-Columns are a fixed, ordered list (Backlog, Discovery, In Progress, Review, Done) — reorderable content, not addable/removable columns. Cards live in a flat `cards` map keyed by id; each column stores an ordered array of card ids. This normalized shape is intentional and should be preserved/reused as the API contract when the backend is introduced.
+Ids are strings issued by the backend (stringified SQLite row ids), not client-generated. Columns are a fixed, ordered list (Backlog, Discovery, In Progress, Review, Done) — reorderable content, not addable/removable columns. Cards live in a flat `cards` map keyed by id; each column stores an ordered array of card ids. See `docs/schema.json` / `docs/DATABASE.md` for how this maps to the database.
 
-## Known gaps vs. the full MVP spec (expected — not bugs)
+## Mutation strategy
 
-- No authentication/session handling.
-- No backend calls; all state is local `useState`, lost on refresh.
-- No AI chat sidebar.
+- Rename, move (drag-and-drop), and delete are optimistic: local state updates immediately, the API call fires in the background, and on failure the board reverts to its pre-mutation snapshot plus an error banner.
+- Add-card is not optimistic — it awaits the server response before adding the card locally, since the card's id is server-assigned. The form stays open with the user's input on failure so they can retry.
+- A 401 from any board API call (session expired mid-use) calls `onSessionExpired`, which redirects to `/login` — it does not surface as an error banner.
 
 ## Static export and serving
 
@@ -43,15 +46,23 @@ Columns are a fixed, ordered list (Backlog, Discovery, In Progress, Review, Done
 
 ## Testing
 
-- Unit/component tests: Vitest + Testing Library (`npm run test:unit`), e.g. `KanbanBoard.test.tsx`, `kanban.test.ts` (tests `moveCard` logic directly)
-- E2E against `next dev`: Playwright (`npm run test:e2e`), spec in `tests/kanban.spec.ts`
-- E2E against the real Docker/FastAPI-served static build: `npm run test:e2e:static` (uses `playwright.static.config.ts`, spec in `tests/static-build.spec.ts`) — this runs `docker compose up --build` as its web server, so it needs Docker running and takes longer than the dev-mode suite
-- `npm run test:all` runs unit + dev-mode e2e (not the static/Docker suite, which is separate due to cost)
+- Unit/component tests: Vitest + Testing Library (`npm run test:unit`) — `KanbanBoard.test.tsx` mocks `src/lib/api.ts` and asserts each action calls the right API function; `kanban.test.ts` tests `moveCard` directly
+- E2E: Playwright (`npm run test:e2e`), spec in `tests/kanban.spec.ts`, run via `tests/run-e2e.mjs` (see below) against the real Docker/FastAPI build — there is no separate dev-mode or static-build suite, just this one
+- `npm run test:all` runs unit + e2e
 
-Use `data-testid` attributes already present (`column-<id>`, `card-<id>`) for e2e/unit selectors rather than adding new query strategies.
+### E2E test isolation
+
+E2E runs against the real backend and database, not mocks, using `docker-compose.e2e.yml` (repo root) to override the persistent `app-data` volume with a throwaway anonymous one, so mutations in the "add, rename, move, and delete" test never touch a real dev board and each run starts from a clean seeded DB.
+
+`tests/run-e2e.mjs` (not `playwright test` directly) is what `npm run test:e2e` invokes. It force-clears any existing `app` container *before* starting Playwright, because Playwright's own `reuseExistingServer:false` port-conflict check runs before `globalSetup` would — a `globalSetup`-based cleanup was tried first and proved (by making it throw unconditionally) to run too late to help. Written in Node rather than a shell script since the project targets Mac/Linux/PC.
+
+Because the e2e DB is destroyed and reseeded every run, locate columns by their known seed-data content (`.filter({ hasText: "..." })`) rather than guessing ids — but resolve the concrete `data-testid` once, up front, before any mutation. A locator built purely from a content filter is re-evaluated live, so once a test moves or renames the content it was matching on, the same locator can silently start resolving to a different column.
+
+Use `data-testid` attributes already present (`column-<id>`, `card-<id>`) for e2e/unit selectors rather than adding new query strategies. Prefer `getByLabel` over `getByRole("button", ...)` for the delete button specifically — `useSortable` gives the card's own `<article>` `role="button"` too, and Chromium's accessible-name algorithm folds the nested button's label into the article's computed name, so a role+name query matches both ("strict mode violation").
 
 ## Conventions to follow when extending
 
 - Keep `BoardData` normalized (columns reference card ids; don't nest full card objects in columns).
-- Keep board mutation logic as pure functions in `src/lib/kanban.ts` where practical (like `moveCard`), called from the stateful component — makes it easy to unit test and later replace local `useState` with API-backed state/fetch calls.
+- Keep board mutation logic as pure functions in `src/lib/kanban.ts` where practical (like `moveCard`) — this is what optimistic local updates are built on.
+- New board API calls belong in `src/lib/api.ts`, following the existing pattern (throw `UnauthorizedError` on 401, plain `Error` otherwise).
 - Match the existing Tailwind CSS-variable-based theming (`var(--navy-dark)`, `var(--primary-blue)`, `var(--secondary-purple)`, `var(--accent-yellow)`, `var(--gray-text)`) rather than hardcoding new colors — these map to the palette in the root `AGENTS.md`.

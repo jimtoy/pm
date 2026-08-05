@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
-    "test:e2e": "playwright test",
+    "test:e2e": "node tests/run-e2e.mjs",
     "test:all": "npm run test:unit && npm run test:e2e"
   },
   "dependencies": {

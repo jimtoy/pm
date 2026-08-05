@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -13,14 +13,27 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
-import { createId, initialData, moveCard, type BoardData } from "@/lib/kanban";
+import { moveCard, type BoardData } from "@/lib/kanban";
+import {
+  fetchBoard,
+  renameColumn as renameColumnApi,
+  createCard as createCardApi,
+  moveCard as moveCardApi,
+  deleteCard as deleteCardApi,
+  UnauthorizedError,
+} from "@/lib/api";
 
 type KanbanBoardProps = {
   onLogout?: () => void;
+  onSessionExpired?: () => void;
 };
 
-export const KanbanBoard = ({ onLogout }: KanbanBoardProps) => {
-  const [board, setBoard] = useState<BoardData>(() => initialData);
+type LoadState = "loading" | "ready" | "error";
+
+export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) => {
+  const [board, setBoard] = useState<BoardData | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [actionError, setActionError] = useState<string | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -29,7 +42,37 @@ export const KanbanBoard = ({ onLogout }: KanbanBoardProps) => {
     })
   );
 
-  const cardsById = useMemo(() => board.cards, [board.cards]);
+  const loadBoard = () => {
+    setLoadState("loading");
+    fetchBoard()
+      .then((data) => {
+        setBoard(data);
+        setLoadState("ready");
+      })
+      .catch((error) => {
+        if (error instanceof UnauthorizedError) {
+          onSessionExpired?.();
+          return;
+        }
+        setLoadState("error");
+      });
+  };
+
+  useEffect(() => {
+    loadBoard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const cardsById = useMemo(() => board?.cards ?? {}, [board]);
+
+  const handleMutationError = (error: unknown, previousBoard: BoardData) => {
+    if (error instanceof UnauthorizedError) {
+      onSessionExpired?.();
+      return;
+    }
+    setBoard(previousBoard);
+    setActionError("Something went wrong saving that change. Please try again.");
+  };
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
@@ -39,58 +82,98 @@ export const KanbanBoard = ({ onLogout }: KanbanBoardProps) => {
     const { active, over } = event;
     setActiveCardId(null);
 
-    if (!over || active.id === over.id) {
+    if (!board || !over || active.id === over.id) {
       return;
     }
 
-    setBoard((prev) => ({
-      ...prev,
-      columns: moveCard(prev.columns, active.id as string, over.id as string),
-    }));
+    const previousBoard = board;
+    const nextColumns = moveCard(board.columns, active.id as string, over.id as string);
+    if (nextColumns === board.columns) {
+      return;
+    }
+
+    const cardId = active.id as string;
+    const targetColumn = nextColumns.find((column) => column.cardIds.includes(cardId));
+    if (!targetColumn) {
+      return;
+    }
+    const position = targetColumn.cardIds.indexOf(cardId);
+
+    setActionError(null);
+    setBoard({ ...board, columns: nextColumns });
+
+    moveCardApi(cardId, targetColumn.id, position).catch((error) =>
+      handleMutationError(error, previousBoard)
+    );
   };
 
   const handleRenameColumn = (columnId: string, title: string) => {
-    setBoard((prev) => ({
-      ...prev,
-      columns: prev.columns.map((column) =>
+    if (!board) {
+      return;
+    }
+    const previousBoard = board;
+    setActionError(null);
+    setBoard({
+      ...board,
+      columns: board.columns.map((column) =>
         column.id === columnId ? { ...column, title } : column
       ),
-    }));
+    });
+
+    renameColumnApi(columnId, title).catch((error) =>
+      handleMutationError(error, previousBoard)
+    );
   };
 
-  const handleAddCard = (columnId: string, title: string, details: string) => {
-    const id = createId("card");
-    setBoard((prev) => ({
-      ...prev,
-      cards: {
-        ...prev.cards,
-        [id]: { id, title, details: details || "No details yet." },
-      },
-      columns: prev.columns.map((column) =>
-        column.id === columnId
-          ? { ...column, cardIds: [...column.cardIds, id] }
-          : column
-      ),
-    }));
+  const handleAddCard = async (columnId: string, title: string, details: string) => {
+    if (!board) {
+      return;
+    }
+    setActionError(null);
+    try {
+      const card = await createCardApi(columnId, title, details);
+      setBoard((prev) =>
+        prev
+          ? {
+              ...prev,
+              cards: { ...prev.cards, [card.id]: card },
+              columns: prev.columns.map((column) =>
+                column.id === columnId
+                  ? { ...column, cardIds: [...column.cardIds, card.id] }
+                  : column
+              ),
+            }
+          : prev
+      );
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        onSessionExpired?.();
+        return;
+      }
+      setActionError("Couldn't add that card. Please try again.");
+      throw error;
+    }
   };
 
   const handleDeleteCard = (columnId: string, cardId: string) => {
-    setBoard((prev) => {
-      return {
-        ...prev,
-        cards: Object.fromEntries(
-          Object.entries(prev.cards).filter(([id]) => id !== cardId)
-        ),
-        columns: prev.columns.map((column) =>
-          column.id === columnId
-            ? {
-                ...column,
-                cardIds: column.cardIds.filter((id) => id !== cardId),
-              }
-            : column
-        ),
-      };
+    if (!board) {
+      return;
+    }
+    const previousBoard = board;
+    setActionError(null);
+    setBoard({
+      ...board,
+      cards: Object.fromEntries(
+        Object.entries(board.cards).filter(([id]) => id !== cardId)
+      ),
+      columns: board.columns.map((column) =>
+        column.id === columnId
+          ? { ...column, cardIds: column.cardIds.filter((id) => id !== cardId) }
+          : column
+      ),
     });
+
+    deleteCardApi(cardId).catch((error) => handleMutationError(error, previousBoard));
   };
 
   const activeCard = activeCardId ? cardsById[activeCardId] : null;
@@ -135,45 +218,85 @@ export const KanbanBoard = ({ onLogout }: KanbanBoardProps) => {
               )}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-4">
-            {board.columns.map((column) => (
-              <div
-                key={column.id}
-                className="flex items-center gap-2 rounded-full border border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--navy-dark)]"
+          {board && (
+            <div className="flex flex-wrap items-center gap-4">
+              {board.columns.map((column) => (
+                <div
+                  key={column.id}
+                  className="flex items-center gap-2 rounded-full border border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--navy-dark)]"
+                >
+                  <span className="h-2 w-2 rounded-full bg-[var(--accent-yellow)]" />
+                  {column.title}
+                </div>
+              ))}
+            </div>
+          )}
+          {actionError && (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700"
+            >
+              <span>{actionError}</span>
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="text-xs font-semibold uppercase tracking-wide text-red-700 hover:underline"
               >
-                <span className="h-2 w-2 rounded-full bg-[var(--accent-yellow)]" />
-                {column.title}
-              </div>
-            ))}
-          </div>
+                Dismiss
+              </button>
+            </div>
+          )}
         </header>
 
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCorners}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-        >
-          <section className="grid gap-6 lg:grid-cols-5">
-            {board.columns.map((column) => (
-              <KanbanColumn
-                key={column.id}
-                column={column}
-                cards={column.cardIds.map((cardId) => board.cards[cardId])}
-                onRename={handleRenameColumn}
-                onAddCard={handleAddCard}
-                onDeleteCard={handleDeleteCard}
-              />
-            ))}
-          </section>
-          <DragOverlay>
-            {activeCard ? (
-              <div className="w-[260px]">
-                <KanbanCardPreview card={activeCard} />
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
+        {loadState === "loading" && (
+          <p className="text-center text-sm font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
+            Loading board...
+          </p>
+        )}
+
+        {loadState === "error" && (
+          <div className="flex flex-col items-center gap-4 rounded-3xl border border-[var(--stroke)] bg-white p-10 text-center">
+            <p className="text-sm text-[var(--gray-text)]">
+              Couldn&apos;t load the board. Check your connection and try again.
+            </p>
+            <button
+              type="button"
+              onClick={loadBoard}
+              className="rounded-full bg-[var(--secondary-purple)] px-5 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {loadState === "ready" && board && (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCorners}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
+            <section className="grid gap-6 lg:grid-cols-5">
+              {board.columns.map((column) => (
+                <KanbanColumn
+                  key={column.id}
+                  column={column}
+                  cards={column.cardIds.map((cardId) => board.cards[cardId])}
+                  onRename={handleRenameColumn}
+                  onAddCard={handleAddCard}
+                  onDeleteCard={handleDeleteCard}
+                />
+              ))}
+            </section>
+            <DragOverlay>
+              {activeCard ? (
+                <div className="w-[260px]">
+                  <KanbanCardPreview card={activeCard} />
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        )}
       </main>
     </div>
   );

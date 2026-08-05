@@ -11,10 +11,14 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "docker compose up --build",
+    // Overrides the persistent app-data volume with a fresh, throwaway one so
+    // e2e mutations (add/rename/move/delete) never leak into a real dev board
+    // and each run starts from a clean seeded DB.
+    command:
+      "docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build --force-recreate",
     cwd: "..",
     url: "http://127.0.0.1:8000/api/hello",
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 180_000,
   },
   projects: [

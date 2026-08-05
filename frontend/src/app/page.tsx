@@ -28,5 +28,5 @@ export default function Home() {
     return null;
   }
 
-  return <KanbanBoard onLogout={handleLogout} />;
+  return <KanbanBoard onLogout={handleLogout} onSessionExpired={handleLogout} />;
 }

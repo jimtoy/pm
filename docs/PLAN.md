@@ -117,21 +117,32 @@ See root `AGENTS.md` for business requirements, technical decisions, and coding 
 
 ## Part 7: Frontend + Backend
 
-- [ ] Replace in-memory `useState`/`initialData` in `KanbanBoard.tsx` with data fetched from `/api/board` on load
-- [ ] Wire `onRename`, `onAddCard`, `onDeleteCard`, and drag-and-drop move handlers to call the corresponding API routes, updating local state optimistically or after response
-- [ ] Handle loading and error states (e.g. API unreachable, session expired mid-use redirects to login)
-- [ ] Keep `src/lib/kanban.ts`'s pure logic (like `moveCard`) reusable for optimistic local updates before/independent of server confirmation
+- [x] Replace in-memory `useState`/`initialData` in `KanbanBoard.tsx` with data fetched from `/api/board` on load
+- [x] Wire `onRename`, `onAddCard`, `onDeleteCard`, and drag-and-drop move handlers to call the corresponding API routes, updating local state optimistically or after response
+- [x] Handle loading and error states (e.g. API unreachable, session expired mid-use redirects to login)
+- [x] Keep `src/lib/kanban.ts`'s pure logic (like `moveCard`) reusable for optimistic local updates before/independent of server confirmation
+
+**Implementation notes:**
+- New `frontend/src/lib/api.ts` is the API client (`fetchBoard`, `renameColumn`, `createCard`, `moveCard`, `deleteCard`), throwing `UnauthorizedError` on 401 so callers can redirect rather than show an error banner.
+- Rename commits on blur/Enter (not per keystroke) via local draft state in `KanbanColumn`, to avoid a PATCH per character typed. Add-card is non-optimistic (awaits the server response, since the id is server-assigned); rename/move/delete are optimistic with revert-on-failure.
+- `initialData` and `createId` were deleted from `kanban.ts` — dead code once the board is server-backed; `moveCard` (the pure reducer) stays and is reused for the optimistic drag-and-drop update.
+- `KanbanBoard`/`page.tsx` gained an `onSessionExpired` callback (reuses the existing logout-and-redirect handler) so a 401 from any board API call sends the user back to `/login`.
 
 **Tests:**
-- Frontend unit tests: components correctly call the API client functions on each action (mock fetch/API layer)
-- E2E (Playwright): full flow — log in, add a card, rename a column, drag a card to another column, delete a card, reload the page, and confirm all changes persisted (i.e. came from the backend, not just local state)
-- Backend tests from Part 6 still passing
+- [x] Frontend unit tests: `KanbanBoard.test.tsx` mocks `@/lib/api` and asserts each action (rename, add, delete) calls the right API function with the right args, plus loading/error/session-expiry states and optimistic-revert-on-failure — 19/19 Vitest passing
+- [x] E2E (Playwright): full flow — log in, add a card, rename a column, drag a card to another column, delete a card, reload the page, and confirm all changes persisted against the real backend — 7/7 passing
+- [x] Backend tests from Part 6 still passing — 27/27
 
-**Success criteria:** reloading the browser preserves all board changes; e2e test suite exercises the full persistent loop end-to-end against the real backend (not mocks) using a test DB.
+**Success criteria:** met. Reloading the browser preserves all board changes (verified via the e2e reload assertions, and separately via raw `curl` against a running container). E2E exercises the full persistent loop against the real backend with a throwaway DB, not mocks.
 
-**Carried over from the Part 4/6 review — handle in this part:**
-- E2E tests now run against a *persistent* `app-data` volume. Today that is harmless (the board is in-memory, so e2e mutations touch nothing), but once the board is server-backed, tests like "adds a card" will mutate real state and leak between runs, making the suite order-dependent. Point the e2e container at a throwaway DB (override `DB_PATH` or use a disposable volume) as part of wiring the frontend up.
-- The existing e2e tests address cards/columns by the frontend's hardcoded ids (`card-card-1`, `column-col-review`). The backend issues integer ids (`"1"`, `"2"`), so these selectors must be updated when the board starts loading from `/api/board`.
+**The two carried-over items from the Part 4/6 review, and what actually shipped:**
+- *Throwaway e2e DB:* added `docker-compose.e2e.yml`, an override that replaces the `app-data` named volume with an anonymous one at the same mount point (verified via `docker compose config` that this fully replaces rather than merges with the base volume). `playwright.config.ts`'s `webServer.command` now runs against both compose files with `--force-recreate`.
+- *Selectors:* e2e now resolves each column's real backend-assigned testid once per test, before any mutation (see below for why), instead of hardcoding the old frontend ids.
+
+**Three bugs found while getting e2e green, worth recording:**
+1. *Dynamic locators silently re-targeted after a mutation.* The first draft of the persistence e2e test located columns with `.filter({ hasText: "<seed card title>" })`. Playwright locators are lazy/re-evaluated on each use, so once the drag step moved that seed card into a different column, the *same* locator started resolving to the new column instead of the original one — a later step then tried to click a button that didn't exist there and timed out. Fixed by resolving each column's concrete `data-testid` once, up front, and building fixed `getByTestId(...)` locators from it for the rest of the test.
+2. *`getByRole` ambiguity from dnd-kit.* `useSortable` spreads `role="button"` onto the card's own `<article>`, and Chromium's accessible-name algorithm folds a nested button's label into its ancestor's computed name — so `getByRole("button", { name: /delete .../i })` matched both the card and the delete button ("strict mode violation"). Switched to `getByLabel(...)`, which only honors explicit `aria-label` and ignores the content-fallback that caused the collision.
+3. *`reuseExistingServer: false` fails before `globalSetup` runs.* Tried adding a Playwright `globalSetup` to force-clear any stale container left by an interrupted previous run. Proved empirically (by making it throw unconditionally) that Playwright's port-conflict preflight check runs *before* `globalSetup` when `reuseExistingServer` is false — so a leftover container from a prior run, or from `scripts/start.sh`, made every subsequent `npm run test:e2e` fail immediately with no way for `globalSetup` to fix it in time. Replaced it with `frontend/tests/run-e2e.mjs`, a small Node wrapper (cross-platform per `AGENTS.md`'s Mac/Linux/PC requirement, not a shell one-liner) that tears down any existing container as a step *before* invoking `playwright test` at all. `package.json`'s `test:e2e` now points at this wrapper. Verified self-healing by deliberately leaving a container running from `scripts/start.sh` and confirming `npm run test:e2e` cleans up and passes without manual intervention, and confirmed via two consecutive full runs that state doesn't leak between them.
 
 ---
 
