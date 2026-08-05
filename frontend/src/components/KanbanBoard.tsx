@@ -35,6 +35,7 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [activeCardWidth, setActiveCardWidth] = useState<number | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -76,6 +77,10 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
+    // Match the drag preview's width to the real card being dragged, rather
+    // than a guessed constant — a mismatched width makes the preview overlap
+    // neighboring columns while dragging and while it animates to rest.
+    setActiveCardWidth(event.active.rect.current.initial?.width ?? null);
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -288,9 +293,9 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
                 />
               ))}
             </section>
-            <DragOverlay>
+            <DragOverlay dropAnimation={null}>
               {activeCard ? (
-                <div className="w-[260px]">
+                <div style={activeCardWidth ? { width: activeCardWidth } : undefined}>
                   <KanbanCardPreview card={activeCard} />
                 </div>
               ) : null}
