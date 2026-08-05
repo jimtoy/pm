@@ -125,3 +125,42 @@ test("add, rename, move, and delete all persist across a reload", async ({ page 
   await expect(page.getByText("Gather customer signals")).toHaveCount(0);
   await expect(discoveryColumn.getByLabel("Column title")).toHaveValue("Renamed via e2e");
 });
+
+test("moving a card whose raw backend id collides with an unrelated column's id works", async ({
+  page,
+}) => {
+  // board_columns and cards auto-increment independently, so seed data has
+  // "In Progress" as raw column id 3 and "Prototype analytics view" as raw
+  // card id 3. Without id prefixing in the API client, moveCard() misreads
+  // the card as already living in "In Progress" and silently no-ops instead
+  // of moving it — no error, the card just doesn't go anywhere.
+  await authenticate(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+
+  const backlogColumn = page
+    .locator('[data-testid^="column-"]')
+    .filter({ hasText: "Align roadmap themes" });
+  const movedCard = page.getByText("Prototype analytics view");
+  const cardBox = await movedCard.boundingBox();
+  const columnBox = await backlogColumn.boundingBox();
+  if (!cardBox || !columnBox) {
+    throw new Error("Unable to resolve drag coordinates.");
+  }
+
+  await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(columnBox.x + columnBox.width / 2, columnBox.y + 120, { steps: 12 });
+  await page.mouse.up();
+
+  await expect(backlogColumn.getByText("Prototype analytics view")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+  await expect(
+    page
+      .locator('[data-testid^="column-"]')
+      .filter({ hasText: "Align roadmap themes" })
+      .getByText("Prototype analytics view")
+  ).toBeVisible();
+});

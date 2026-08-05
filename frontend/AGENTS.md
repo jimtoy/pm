@@ -22,7 +22,7 @@ Next.js 16 / React 19 / TypeScript / Tailwind CSS 4 app. Session-authenticated, 
 - `src/components/NewCardForm.tsx` — inline expand/collapse form for adding a card to a column; stays open with the user's input if the API call fails
 - `src/lib/kanban.ts` — data model (`Card`, `Column`, `BoardData`) and `moveCard`, the pure reducer-style logic for drag-and-drop reordering, reused for the optimistic local update before the server confirms
 - `src/lib/auth.ts` — `fetchSession`/`login`/`logout`, calling `/api/session`, `/api/login`, `/api/logout`
-- `src/lib/api.ts` — board API client (`fetchBoard`, `renameColumn`, `createCard`, `moveCard`, `deleteCard`); throws `UnauthorizedError` on a 401 response so callers can redirect to login instead of showing an error banner
+- `src/lib/api.ts` — board API client (`fetchBoard`, `renameColumn`, `createCard`, `moveCard`, `deleteCard`); throws `UnauthorizedError` on a 401 response so callers can redirect to login instead of showing an error banner; also prefixes/strips ids at the API boundary (see below)
 
 ## Data model
 
@@ -32,7 +32,9 @@ type Column = { id: string; title: string; cardIds: string[] };
 type BoardData = { columns: Column[]; cards: Record<string, Card> };
 ```
 
-Ids are strings issued by the backend (stringified SQLite row ids), not client-generated. Columns are a fixed, ordered list (Backlog, Discovery, In Progress, Review, Done) — reorderable content, not addable/removable columns. Cards live in a flat `cards` map keyed by id; each column stores an ordered array of card ids. See `docs/schema.json` / `docs/DATABASE.md` for how this maps to the database.
+Ids are strings issued by the backend (stringified SQLite row ids), not client-generated — but `board_columns` and `cards` are separate tables that each auto-increment independently, so a raw column id and a raw card id can collide (e.g. both `"3"`). `src/lib/api.ts` prefixes every id crossing the boundary (`col-<id>` / `card-<id>`) and strips the prefix back off before calling the backend, so `id: string` values are always globally unique above that layer — this matters because dnd-kit and `moveCard` require unique ids across the whole board, not just within a column. Never bypass `api.ts` to talk to `/api/board`, `/api/columns`, or `/api/cards` directly, and never assume an id is numeric.
+
+Columns are a fixed, ordered list (Backlog, Discovery, In Progress, Review, Done) — reorderable content, not addable/removable columns. Cards live in a flat `cards` map keyed by id; each column stores an ordered array of card ids. See `docs/schema.json` / `docs/DATABASE.md` for how this maps to the database.
 
 ## Mutation strategy
 
@@ -46,7 +48,7 @@ Ids are strings issued by the backend (stringified SQLite row ids), not client-g
 
 ## Testing
 
-- Unit/component tests: Vitest + Testing Library (`npm run test:unit`) — `KanbanBoard.test.tsx` mocks `src/lib/api.ts` and asserts each action calls the right API function; `kanban.test.ts` tests `moveCard` directly
+- Unit/component tests: Vitest + Testing Library (`npm run test:unit`) — `KanbanBoard.test.tsx` mocks `src/lib/api.ts` and asserts each action calls the right API function; `kanban.test.ts` tests `moveCard` directly; `api.test.ts` pins the id-prefixing behavior (mocking `fetch`, not the module) against a raw backend response with a deliberate column/card id collision
 - E2E: Playwright (`npm run test:e2e`), spec in `tests/kanban.spec.ts`, run via `tests/run-e2e.mjs` (see below) against the real Docker/FastAPI build — there is no separate dev-mode or static-build suite, just this one
 - `npm run test:all` runs unit + e2e
 

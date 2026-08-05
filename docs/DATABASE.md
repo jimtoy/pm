@@ -26,7 +26,9 @@ When a card moves, the backend renumbers `position` for affected rows in the sou
 
 ## IDs across the API boundary
 
-DB primary keys are auto-incrementing integers. The API serializes them as strings (e.g. `"1"`) so the frontend's existing `Card`/`Column` types (which use `id: string`) don't need to change in Part 7 — only where those ids come from changes (server-generated instead of `createId()`).
+DB primary keys are auto-incrementing integers, and the API serializes them as plain strings (e.g. `"1"`). `board_columns` and `cards` are separate tables, each auto-incrementing independently, so a column and a card can legitimately share the same raw id (e.g. column `3` and card `3` both exist).
+
+The frontend cannot use these raw ids directly: dnd-kit and `moveCard()` (`frontend/src/lib/kanban.ts`) require every id in the board to be globally unique, since columns and cards live in the same drag-and-drop id space. `frontend/src/lib/api.ts` prefixes every id at the boundary (`col-<id>` / `card-<id>`, restoring the old in-memory demo's convention) when mapping API responses into `BoardData`, and strips the prefix back off before sending ids to the backend. Nothing above `api.ts` — components, `kanban.ts`, tests — ever sees a raw, unprefixed id.
 
 ## Users and auth
 
