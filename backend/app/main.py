@@ -2,13 +2,18 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.ai import router as ai_router
 from app.auth import router as auth_router
 from app.board import router as board_router
+from app.chat import router as chat_router
 from app.db import connect, init_db
+
+load_dotenv()
 
 DEFAULT_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", DEFAULT_STATIC_DIR))
@@ -34,6 +39,8 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(board_router)
+app.include_router(ai_router)
+app.include_router(chat_router)
 
 
 @app.get("/api/hello")

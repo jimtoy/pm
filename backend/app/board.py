@@ -51,14 +51,14 @@ def get_db():
         conn.close()
 
 
-def _parse_id(raw_id: str) -> int:
+def parse_id(raw_id: str) -> int:
     try:
         return int(raw_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Not found")
 
 
-def _get_board_id(conn: sqlite3.Connection) -> int:
+def get_board_id(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT id FROM boards ORDER BY id LIMIT 1").fetchone()
     if row is None:
         raise HTTPException(status_code=500, detail="No board exists")
@@ -122,9 +122,8 @@ def _to_card(row: sqlite3.Row) -> Card:
     return Card(id=str(row["id"]), title=row["title"], details=row["details"])
 
 
-@router.get("/board")
-def get_board(conn: sqlite3.Connection = Depends(get_db)) -> BoardData:
-    board_id = _get_board_id(conn)
+def get_board(conn: sqlite3.Connection) -> BoardData:
+    board_id = get_board_id(conn)
     columns = conn.execute(
         "SELECT id, title FROM board_columns WHERE board_id = ? ORDER BY position",
         (board_id,),
@@ -149,68 +148,96 @@ def get_board(conn: sqlite3.Connection = Depends(get_db)) -> BoardData:
     return BoardData(columns=result_columns, cards=cards)
 
 
+def apply_rename_column(conn: sqlite3.Connection, column_id: int, title: str) -> Column:
+    _require_column(conn, column_id)
+    conn.execute("UPDATE board_columns SET title = ? WHERE id = ?", (title, column_id))
+    conn.commit()
+    card_ids = [str(cid) for cid in _card_ids_in_column(conn, column_id)]
+    return Column(id=str(column_id), title=title, cardIds=card_ids)
+
+
+def apply_create_card(
+    conn: sqlite3.Connection, column_id: int, title: str, details: str = ""
+) -> Card:
+    _require_column(conn, column_id)
+    position = len(_card_ids_in_column(conn, column_id))
+    cursor = conn.execute(
+        "INSERT INTO cards (column_id, title, details, position) VALUES (?, ?, ?, ?)",
+        (column_id, title, details, position),
+    )
+    conn.commit()
+    return Card(id=str(cursor.lastrowid), title=title, details=details)
+
+
+def apply_update_card(
+    conn: sqlite3.Connection,
+    card_id: int,
+    title: str | None = None,
+    details: str | None = None,
+    column_id: int | None = None,
+    position: int | None = None,
+) -> Card:
+    row = _require_card(conn, card_id)
+    final_title = title if title is not None else row["title"]
+    final_details = details if details is not None else row["details"]
+    conn.execute(
+        "UPDATE cards SET title = ?, details = ? WHERE id = ?",
+        (final_title, final_details, card_id),
+    )
+
+    if column_id is not None or position is not None:
+        target_column_id = column_id if column_id is not None else row["column_id"]
+        _require_column(conn, target_column_id)
+        _move_card(conn, card_id, target_column_id, position)
+
+    conn.commit()
+    return Card(id=str(card_id), title=final_title, details=final_details)
+
+
+def apply_delete_card(conn: sqlite3.Connection, card_id: int) -> None:
+    row = _require_card(conn, card_id)
+    column_id = row["column_id"]
+    conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+    remaining_ids = [cid for cid in _card_ids_in_column(conn, column_id) if cid != card_id]
+    _renumber(conn, column_id, remaining_ids)
+    conn.commit()
+
+
+@router.get("/board")
+def get_board_route(conn: sqlite3.Connection = Depends(get_db)) -> BoardData:
+    return get_board(conn)
+
+
 @router.patch("/columns/{column_id}")
 def rename_column(
     column_id: str, payload: RenameColumnRequest, conn: sqlite3.Connection = Depends(get_db)
 ) -> Column:
-    parsed_id = _parse_id(column_id)
-    _require_column(conn, parsed_id)
-    conn.execute(
-        "UPDATE board_columns SET title = ? WHERE id = ?", (payload.title, parsed_id)
-    )
-    conn.commit()
-    card_ids = [str(cid) for cid in _card_ids_in_column(conn, parsed_id)]
-    return Column(id=column_id, title=payload.title, cardIds=card_ids)
+    return apply_rename_column(conn, parse_id(column_id), payload.title)
 
 
 @router.post("/cards")
 def create_card(
     payload: CreateCardRequest, conn: sqlite3.Connection = Depends(get_db)
 ) -> Card:
-    column_id = _parse_id(payload.column_id)
-    _require_column(conn, column_id)
-    position = len(_card_ids_in_column(conn, column_id))
-    cursor = conn.execute(
-        "INSERT INTO cards (column_id, title, details, position) VALUES (?, ?, ?, ?)",
-        (column_id, payload.title, payload.details, position),
-    )
-    conn.commit()
-    return Card(id=str(cursor.lastrowid), title=payload.title, details=payload.details)
+    return apply_create_card(conn, parse_id(payload.column_id), payload.title, payload.details)
 
 
 @router.patch("/cards/{card_id}")
 def update_card(
     card_id: str, payload: UpdateCardRequest, conn: sqlite3.Connection = Depends(get_db)
 ) -> Card:
-    parsed_id = _parse_id(card_id)
-    row = _require_card(conn, parsed_id)
-
-    title = payload.title if payload.title is not None else row["title"]
-    details = payload.details if payload.details is not None else row["details"]
-    conn.execute(
-        "UPDATE cards SET title = ?, details = ? WHERE id = ?", (title, details, parsed_id)
+    column_id = parse_id(payload.column_id) if payload.column_id is not None else None
+    return apply_update_card(
+        conn,
+        parse_id(card_id),
+        title=payload.title,
+        details=payload.details,
+        column_id=column_id,
+        position=payload.position,
     )
-
-    if payload.column_id is not None or payload.position is not None:
-        new_column_id = (
-            _parse_id(payload.column_id) if payload.column_id is not None else row["column_id"]
-        )
-        _require_column(conn, new_column_id)
-        _move_card(conn, parsed_id, new_column_id, payload.position)
-
-    conn.commit()
-    return Card(id=card_id, title=title, details=details)
 
 
 @router.delete("/cards/{card_id}")
 def delete_card(card_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict[str, bool]:
-    parsed_id = _parse_id(card_id)
-    row = _require_card(conn, parsed_id)
-    column_id = row["column_id"]
-    conn.execute("DELETE FROM cards WHERE id = ?", (parsed_id,))
-    remaining_ids = [
-        cid for cid in _card_ids_in_column(conn, column_id) if cid != parsed_id
-    ]
-    _renumber(conn, column_id, remaining_ids)
-    conn.commit()
+    apply_delete_card(conn, parse_id(card_id))
     return {"deleted": True}

@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS cards (
     details TEXT NOT NULL DEFAULT '',
     position INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id INTEGER NOT NULL REFERENCES boards(id),
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 SEED_COLUMNS = [

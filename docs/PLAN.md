@@ -154,32 +154,46 @@ See root `AGENTS.md` for business requirements, technical decisions, and coding 
 
 ## Part 8: AI connectivity
 
-- [ ] Add OpenRouter client setup in the backend (reading `OPENROUTER_API_KEY` from `.env`), using `openai/gpt-oss-120b`
-- [ ] Add a minimal `/api/ai/ping` (or similar) route that sends a "what is 2+2?" prompt and returns the model's response, to prove connectivity end-to-end
-- [ ] Handle and surface API errors (missing key, network failure, bad response) clearly rather than silently failing
+- [x] Add OpenRouter client setup in the backend (reading `OPENROUTER_API_KEY` from `.env`), using `openai/gpt-oss-120b`
+- [x] Add a minimal `/api/ai/ping` (or similar) route that sends a "what is 2+2?" prompt and returns the model's response, to prove connectivity end-to-end
+- [x] Handle and surface API errors (missing key, network failure, bad response) clearly rather than silently failing
+
+**Implementation notes:**
+- New `backend/app/ai.py`: `get_client()` builds an `openai.OpenAI` client pointed at OpenRouter's base URL (`https://openrouter.ai/api/v1`), reading `OPENROUTER_API_KEY` from the environment; raises a 500 with a clear message if the key is missing rather than calling out with no key. `ask(client, prompt)` calls the chat completions endpoint with model `openai/gpt-oss-120b`, catches `openai.APIError` (covers connection failures, timeouts, and non-2xx responses) and re-raises as a 502, and separately treats an empty/missing response body as a 502 rather than crashing.
+- `GET /api/ai/ping` lives behind `require_auth` (same pattern as the board router) and sends the fixed prompt "what is 2+2?".
+- Added `python-dotenv`; `backend/app/main.py` calls `load_dotenv()` at import time so the root `.env` is picked up when running `uv run uvicorn`/`pytest` directly (outside Docker). In Docker, `docker-compose.yml`'s existing `env_file: .env` already injects the real env var, so this is a no-op there.
+- `openai` and `python-dotenv` added to `backend/pyproject.toml`; `uv.lock` regenerated.
 
 **Tests:**
-- Backend test that calls the real OpenRouter API (may be a manual/integration test rather than part of the default fast test suite, since it costs money/network) and asserts a sane response containing "4"
-- Unit test with a mocked OpenRouter client verifying request shape (model name, prompt) and error handling paths
+- [x] `backend/tests/test_ai.py`: unit tests against a hand-rolled fake OpenAI client verifying `ask()`'s request shape (model name, single user-role message) and its 502 handling for both an `APIConnectionError` and an empty response; route-level tests for auth-required (401), missing key (500), success (200 with reply), and a client-level failure surfacing as 502 — 7/7 passing
+- [x] `backend/tests/test_ai_integration.py`: real call to OpenRouter, marked `integration` and skipped from the default `uv run pytest` run via `addopts = "-m 'not integration'"` in `pyproject.toml` (costs money/network); run explicitly with `uv run pytest -m integration` — passing, actual model reply was `"2 + 2 = 4."`
+- [x] Full non-integration suite: 34/34 passing (`uv run pytest`, run inside a throwaway `uv` container as in Part 6, since local `uv` isn't on PATH in this environment)
 
-**Success criteria:** hitting the ping route returns a real AI-generated answer confirming "4" (or similar), proving the OpenRouter integration is correctly configured.
+**Success criteria:** met. Verified against the real Docker build, not just tests: built and started the container via `docker compose up -d --build`, logged in via `curl`, and called `GET /api/ai/ping` — returned `{"reply":"2 + 2 = 4."}`, a genuine AI-generated answer, proving the OpenRouter integration is correctly configured end-to-end. Container logs were clean (single 200 for the ping call, no errors). Stopped cleanly with `docker compose down`.
 
 ---
 
 ## Part 9: Structured AI chat with Kanban context
 
-- [ ] Extend the AI route to accept a user message + conversation history, and always include the current board's JSON as context in the prompt/system message
-- [ ] Use Structured Outputs (OpenRouter/OpenAI-compatible `response_format` with a JSON schema) so the model returns `{ reply: string, board_update: <optional patch/replacement> | null }`
-- [ ] Define the `board_update` schema (decide during implementation: full board replace vs. targeted operations like "move card X to column Y" — favor the simplest approach that keeps the model's job easy and validates cleanly against the DB schema)
-- [ ] If `board_update` is present, apply it to the database using the same logic/routes as Part 6 (reuse, don't duplicate)
-- [ ] Persist conversation history (in DB or in-memory per session — decide based on simplicity; DB preferred for consistency with "survives refresh" expectations)
+- [x] Extend the AI route to accept a user message + conversation history, and always include the current board's JSON as context in the prompt/system message
+- [x] Use Structured Outputs (OpenRouter/OpenAI-compatible `response_format` with a JSON schema) so the model returns `{ reply: string, board_update: <optional patch/replacement> | null }`
+- [x] Define the `board_update` schema (decide during implementation: full board replace vs. targeted operations like "move card X to column Y" — favor the simplest approach that keeps the model's job easy and validates cleanly against the DB schema)
+- [x] If `board_update` is present, apply it to the database using the same logic/routes as Part 6 (reuse, don't duplicate)
+- [x] Persist conversation history (in DB or in-memory per session — decide based on simplicity; DB preferred for consistency with "survives refresh" expectations)
+
+**Implementation notes:**
+- **Schema choice: targeted operations, not full board replace.** New `backend/app/chat.py` defines `BoardOperation` (`op` one of `rename_column`/`create_card`/`update_card`/`delete_card`, plus the relevant id/title/details/position fields) and `StructuredReply = {reply, board_update: list[BoardOperation] | None}`. Chosen over a full-board replace because it reuses Part 6's exact validated logic per-operation (an id that doesn't exist 404s the same way the HTTP routes already do) instead of needing new diff/sync logic to reconcile an entire replacement board against the DB.
+- **Reuse, not duplication:** refactored `backend/app/board.py` so each route handler (`rename_column`, `create_card`, `update_card`, `delete_card`) is a thin wrapper around a plain `apply_*` function; `chat.py` calls the same `apply_*` functions to execute `board_update` operations. `_parse_id`/`_get_board_id` were made non-private (`parse_id`/`get_board_id`) since `chat.py` now uses them too. Verified the refactor was behavior-preserving before adding anything new: all 34 Part 6/7/8 tests still passed against the refactored `board.py` with zero test changes needed.
+- **Context sent to the model:** the system prompt includes the full current board as JSON (via the existing `get_board()`) plus the persisted conversation history, so the model always operates on live state and can reference prior turns.
+- **History persistence:** new `chat_messages` table (`board_id`, `role`, `content`, `created_at`), documented in `docs/schema.json` and `docs/DATABASE.md`. Keyed by `board_id` (matching how the rest of the API resolves "the" board) rather than a client-supplied history list — simpler for callers (just send the new message) and consistent with "survives refresh." A failed turn (AI error) persists neither the user message nor a reply, so retries don't leave a dangling unanswered message.
+- **A real, proven reliability problem, not a guess:** the model (`openai/gpt-oss-120b` via OpenRouter) does not reliably honor the JSON schema in `response_format`, even with `strict: true` and `temperature=0` — confirmed empirically by sampling the real API directly (outside any app code) across repeated identical requests: roughly 30-40% of calls returned syntactically valid JSON that nonetheless violated the schema (most commonly `"operation"` instead of the required `"op"` key). This persisted with `strict: true`, indicating OpenRouter's backend for this model doesn't actually perform constrained decoding, only json-mode-level syntax validity. Root-caused before writing a fix, per `AGENTS.md`'s standards. Fix: `ask_structured` retries up to `MAX_STRUCTURED_ATTEMPTS = 3` specifically on a parse/validation failure (not on a genuine `APIError`, which still surfaces immediately as a 502) — this raised the observed success rate from ~65% to effectively 100% across repeated real-API runs (5 consecutive full test-suite integration runs all green after the fix, one visibly slower where a retry fired).
 
 **Tests:**
-- Unit tests with a mocked AI client: given a canned structured response, confirm the board is updated correctly in the DB and the reply text is returned to the caller
-- Integration test (real API call, manual/tagged as slow): ask the AI to "move the card about X to Done" against a known seeded board and confirm the resulting DB state
-- Validation test: malformed/unexpected structured output from the model is handled gracefully (no crash, clear error)
+- [x] `backend/tests/test_chat.py` (10 tests, mocked AI client): reply-only turns leave the board untouched; `update_card` (move) and `create_card` operations apply correctly to the DB; conversation history persists across turns and is included in the next request's messages; malformed JSON and schema-violating JSON both return 502 without persisting anything; a response that fails twice then succeeds on the 3rd attempt proves the retry path; a genuine `APIError` still surfaces as 502; auth required on both `/api/ai/chat` and `/api/ai/messages`
+- [x] `backend/tests/test_chat_integration.py` (marked `integration`, real API call): asks the AI in plain English to move the seeded "Align roadmap themes" card to Done, confirms the resulting DB state via `/api/board` — passed, plus 3 additional consecutive real-API runs to confirm the retry fix wasn't a fluke
+- [x] Full non-integration suite: 45/45 passing (`uv run pytest`)
 
-**Success criteria:** sending a natural-language instruction that implies a board change results in the correct DB update and a sensible chat reply, verified by both a mocked unit test and at least one real end-to-end call.
+**Success criteria:** met. Verified against the real Docker build, not just tests: `docker compose up -d --build`, logged in via `curl`, sent "Please move the card about gathering customer signals to the In Progress column." to `POST /api/ai/chat` — got a natural-language reply and confirmed via `GET /api/board` that the card actually moved. Separately sent a non-mutating question ("What columns does this board have?") and confirmed the board was untouched afterward. Restarted the container (`docker compose restart`) and confirmed `GET /api/ai/messages` still returned the full prior conversation, proving history survives a restart, not just a page refresh. Container logs were clean throughout (all 200s). Stopped cleanly with `docker compose down`.
 
 ---
 

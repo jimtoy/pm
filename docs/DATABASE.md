@@ -30,6 +30,10 @@ DB primary keys are auto-incrementing integers, and the API serializes them as p
 
 The frontend cannot use these raw ids directly: dnd-kit and `moveCard()` (`frontend/src/lib/kanban.ts`) require every id in the board to be globally unique, since columns and cards live in the same drag-and-drop id space. `frontend/src/lib/api.ts` prefixes every id at the boundary (`col-<id>` / `card-<id>`, restoring the old in-memory demo's convention) when mapping API responses into `BoardData`, and strips the prefix back off before sending ids to the backend. Nothing above `api.ts` — components, `kanban.ts`, tests — ever sees a raw, unprefixed id.
 
+## Chat history (Part 9)
+
+`chat_messages` stores the AI sidebar's conversation, keyed by `board_id` rather than `user_id` since the chat is scoped to "the current board" the same way the rest of the API already resolves it (`get_board_id`). Messages are inserted in send order and loaded with `ORDER BY id`, so message order comes from primary key order rather than `created_at` (which only has second resolution in SQLite's `datetime('now')` and could tie under fast successive inserts). Both the user's message and the assistant's reply are persisted after a successful chat turn; a failed turn (AI error) persists neither, so a retry doesn't leave a dangling unanswered message in the history.
+
 ## Users and auth
 
 The `users` table exists so the schema supports multiple accounts later, but Part 6 does not change the Part 4 login flow: credentials stay hardcoded (`user`/`password`) and are not checked against `password_hash`. The single seeded `users` row exists only so `boards.user_id` has a valid foreign key to point at. Wiring real per-user auth against this table is out of scope for the MVP.
