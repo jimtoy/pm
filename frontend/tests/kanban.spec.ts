@@ -164,3 +164,36 @@ test("moving a card whose raw backend id collides with an unrelated column's id 
       .getByText("Prototype analytics view")
   ).toBeVisible();
 });
+
+test("chat sidebar can move a card via the real AI backend", async ({ page }) => {
+  test.setTimeout(60_000);
+  await authenticate(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+
+  // Resolved before the chat turn runs, per the file's existing convention:
+  // a content-based locator would silently re-target once the card it
+  // matches on relocates.
+  const doneColumnTestId = await page
+    .locator('[data-testid^="column-"]')
+    .filter({ hasText: "Ship marketing page" })
+    .getAttribute("data-testid");
+  const doneColumn = page.getByTestId(doneColumnTestId!);
+
+  await expect(page.getByText(/ask me to create, move, or edit/i)).toBeVisible();
+
+  const chatInput = page.getByLabel("Chat message");
+  await chatInput.fill("Move the 'Align roadmap themes' card to the Done column.");
+  await page.getByRole("button", { name: /send/i }).click();
+
+  // The user's message echoes immediately (optimistic); the assistant reply
+  // arrives once the real AI call resolves.
+  await expect(
+    page.getByText("Move the 'Align roadmap themes' card to the Done column.")
+  ).toBeVisible();
+  await expect(page.getByText(/thinking/i)).toBeVisible();
+  await expect(page.getByText(/thinking/i)).toHaveCount(0, { timeout: 30_000 });
+
+  // The board refreshes from the backend without a manual reload.
+  await expect(doneColumn.getByText("Align roadmap themes")).toBeVisible({ timeout: 30_000 });
+});

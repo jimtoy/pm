@@ -22,7 +22,7 @@ type RawCard = { id: string; title: string; details: string };
 type RawColumn = { id: string; title: string; cardIds: string[] };
 type RawBoardData = { columns: RawColumn[]; cards: Record<string, RawCard> };
 
-const request = async (path: string, init?: RequestInit): Promise<Response> => {
+export const request = async (path: string, init?: RequestInit): Promise<Response> => {
   const response = await fetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },

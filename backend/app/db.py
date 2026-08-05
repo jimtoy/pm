@@ -109,7 +109,14 @@ def get_db_path() -> Path:
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     path = db_path or get_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    # FastAPI dispatches a sync generator dependency's setup, the endpoint
+    # body, and its teardown as separate run_in_threadpool calls, each of
+    # which can land on a different worker thread. sqlite3 connections are
+    # thread-affine by default, so connect()-on-thread-A then execute()-on-
+    # thread-B raises ProgrammingError. This connection is never actually
+    # shared between concurrently-running threads (each request gets its own
+    # via get_db()), so disabling the same-thread check is safe here.
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

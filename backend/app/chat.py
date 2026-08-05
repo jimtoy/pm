@@ -28,12 +28,14 @@ it as a list of operations in `board_update`; otherwise set `board_update` to nu
 
 Valid operations:
 - rename_column: set column_id and title
-- create_card: set column_id, title, and optionally details
+- create_card: set column_id, title, and optionally details. Leave card_id null - the \
+server assigns the new card's id, you never choose or invent one.
 - update_card: set card_id, and only the fields being changed (title, details, column_id \
 to move it, position to reorder within its column)
 - delete_card: set card_id
 
-Always use the exact ids from the board data below; never invent ids.
+For column_id and card_id on every operation other than create_card, always use the exact \
+ids already present in the board data below; never invent one.
 
 Current board:
 {board_json}"""

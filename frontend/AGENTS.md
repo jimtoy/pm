@@ -1,6 +1,6 @@
 # Frontend (Kanban Studio)
 
-Next.js 16 / React 19 / TypeScript / Tailwind CSS 4 app. Session-authenticated, backend-persisted Kanban board — data is fetched from and saved to the FastAPI backend (see root `AGENTS.md` for the full MVP spec; AI chat sidebar is still pending, Part 10 of `docs/PLAN.md`).
+Next.js 16 / React 19 / TypeScript / Tailwind CSS 4 app. Session-authenticated, backend-persisted Kanban board with an AI chat sidebar that can create/edit/move cards — data is fetched from and saved to the FastAPI backend (see root `AGENTS.md` for the full MVP spec).
 
 ## Stack
 
@@ -20,9 +20,11 @@ Next.js 16 / React 19 / TypeScript / Tailwind CSS 4 app. Session-authenticated, 
 - `src/components/KanbanCard.tsx` — one draggable/sortable card with a delete button
 - `src/components/KanbanCardPreview.tsx` — static (non-interactive) card render used in `DragOverlay` while dragging
 - `src/components/NewCardForm.tsx` — inline expand/collapse form for adding a card to a column; stays open with the user's input if the API call fails
+- `src/components/ChatSidebar.tsx` — AI chat panel rendered alongside the board; loads persisted history on mount, sends new messages, shows a "Thinking..." state, reverts the optimistic user message and shows an error banner on failure, and calls `onBoardChanged` (passed in as `KanbanBoard`'s `loadBoard`) after every successful reply so a board-changing instruction shows up without a manual refresh
 - `src/lib/kanban.ts` — data model (`Card`, `Column`, `BoardData`) and `moveCard`, the pure reducer-style logic for drag-and-drop reordering, reused for the optimistic local update before the server confirms
 - `src/lib/auth.ts` — `fetchSession`/`login`/`logout`, calling `/api/session`, `/api/login`, `/api/logout`
-- `src/lib/api.ts` — board API client (`fetchBoard`, `renameColumn`, `createCard`, `moveCard`, `deleteCard`); throws `UnauthorizedError` on a 401 response so callers can redirect to login instead of showing an error banner; also prefixes/strips ids at the API boundary (see below)
+- `src/lib/api.ts` — board API client (`fetchBoard`, `renameColumn`, `createCard`, `moveCard`, `deleteCard`); throws `UnauthorizedError` on a 401 response so callers can redirect to login instead of showing an error banner; also prefixes/strips ids at the API boundary (see below). Exports `request()`, the shared fetch helper, for reuse by other API client modules.
+- `src/lib/chatApi.ts` — chat API client (`fetchMessages`, `sendChatMessage`), built on `api.ts`'s `request()`. No id prefixing needed here — chat messages carry no ids, and the AI's board-changing operations are applied server-side, not sent back to the client.
 
 ## Data model
 
@@ -41,6 +43,7 @@ Columns are a fixed, ordered list (Backlog, Discovery, In Progress, Review, Done
 - Rename, move (drag-and-drop), and delete are optimistic: local state updates immediately, the API call fires in the background, and on failure the board reverts to its pre-mutation snapshot plus an error banner.
 - Add-card is not optimistic — it awaits the server response before adding the card locally, since the card's id is server-assigned. The form stays open with the user's input on failure so they can retry.
 - A 401 from any board API call (session expired mid-use) calls `onSessionExpired`, which redirects to `/login` — it does not surface as an error banner.
+- Chat is simpler: `ChatSidebar` always refetches the board after every successful reply (via `onBoardChanged`), rather than trying to detect whether that specific reply changed anything — the backend's `ChatResponse` doesn't report that, and an extra `GET /api/board` is cheap. The user's chat message is optimistic (shown immediately, reverted with an error banner on failure); the assistant's reply is not (it can't be known in advance).
 
 ## Static export and serving
 
@@ -48,8 +51,8 @@ Columns are a fixed, ordered list (Backlog, Discovery, In Progress, Review, Done
 
 ## Testing
 
-- Unit/component tests: Vitest + Testing Library (`npm run test:unit`) — `KanbanBoard.test.tsx` mocks `src/lib/api.ts` and asserts each action calls the right API function; `kanban.test.ts` tests `moveCard` directly; `api.test.ts` pins the id-prefixing behavior (mocking `fetch`, not the module) against a raw backend response with a deliberate column/card id collision
-- E2E: Playwright (`npm run test:e2e`), spec in `tests/kanban.spec.ts`, run via `tests/run-e2e.mjs` (see below) against the real Docker/FastAPI build — there is no separate dev-mode or static-build suite, just this one
+- Unit/component tests: Vitest + Testing Library (`npm run test:unit`) — `KanbanBoard.test.tsx` mocks `src/lib/api.ts` and asserts each action calls the right API function; `ChatSidebar.test.tsx` mocks `src/lib/chatApi.ts` and covers history loading, sending, the thinking state, error revert, empty-message guard, and 401 redirects on both load and send; `kanban.test.ts` tests `moveCard` directly; `api.test.ts` pins the id-prefixing behavior (mocking `fetch`, not the module) against a raw backend response with a deliberate column/card id collision
+- E2E: Playwright (`npm run test:e2e`), spec in `tests/kanban.spec.ts`, run via `tests/run-e2e.mjs` (see below) against the real Docker/FastAPI build — there is no separate dev-mode or static-build suite, just this one. One test in that spec drives the chat sidebar against the real OpenRouter backend (not a mock), since the API key is available via the same `.env` docker-compose already loads.
 - `npm run test:all` runs unit + e2e
 
 ### E2E test isolation
