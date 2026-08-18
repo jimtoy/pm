@@ -24,13 +24,18 @@ export const KanbanColumn = ({
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
   const [titleDraft, setTitleDraft] = useState(column.title);
   const [lastSyncedTitle, setLastSyncedTitle] = useState(column.title);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
 
-  if (column.title !== lastSyncedTitle) {
+  // Only resync from the prop while the input isn't focused - otherwise a
+  // background board refresh (e.g. the AI chat sidebar refetching after a
+  // reply) can overwrite an in-progress, uncommitted edit mid-keystroke.
+  if (!isEditingTitle && column.title !== lastSyncedTitle) {
     setLastSyncedTitle(column.title);
     setTitleDraft(column.title);
   }
 
   const commitTitle = () => {
+    setIsEditingTitle(false);
     const trimmed = titleDraft.trim();
     if (trimmed && trimmed !== column.title) {
       onRename(column.id, trimmed);
@@ -48,27 +53,26 @@ export const KanbanColumn = ({
       )}
       data-testid={`column-${column.id}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="w-full">
-          <div className="flex items-center gap-3">
-            <div className="h-2 w-10 rounded-full bg-[var(--accent-yellow)]" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
-              {cards.length} cards
-            </span>
-          </div>
-          <input
-            value={titleDraft}
-            onChange={(event) => setTitleDraft(event.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.currentTarget.blur();
-              }
-            }}
-            className="mt-3 w-full bg-transparent font-display text-lg font-semibold text-[var(--navy-dark)] outline-none"
-            aria-label="Column title"
-          />
+      <div>
+        <div className="flex items-center gap-3">
+          <div className="h-2 w-10 rounded-full bg-[var(--accent-yellow)]" />
+          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
+            {cards.length} cards
+          </span>
         </div>
+        <input
+          value={titleDraft}
+          onChange={(event) => setTitleDraft(event.target.value)}
+          onFocus={() => setIsEditingTitle(true)}
+          onBlur={commitTitle}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+          className="mt-3 w-full bg-transparent font-display text-lg font-semibold text-[var(--navy-dark)] outline-none"
+          aria-label="Column title"
+        />
       </div>
       <div className="mt-4 flex flex-1 flex-col gap-3">
         <SortableContext items={column.cardIds} strategy={verticalListSortingStrategy}>
@@ -86,9 +90,7 @@ export const KanbanColumn = ({
           </div>
         )}
       </div>
-      <NewCardForm
-        onAdd={(title, details) => onAddCard(column.id, title, details)}
-      />
+      <NewCardForm onAdd={(title, details) => onAddCard(column.id, title, details)} />
     </section>
   );
 };

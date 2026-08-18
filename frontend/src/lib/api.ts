@@ -22,6 +22,18 @@ type RawCard = { id: string; title: string; details: string };
 type RawColumn = { id: string; title: string; cardIds: string[] };
 type RawBoardData = { columns: RawColumn[]; cards: Record<string, RawCard> };
 
+const toCard = (raw: RawCard): Card => ({
+  id: toCardId(raw.id),
+  title: raw.title,
+  details: raw.details,
+});
+
+const toColumn = (raw: RawColumn): Column => ({
+  id: toColumnId(raw.id),
+  title: raw.title,
+  cardIds: raw.cardIds.map(toCardId),
+});
+
 export const request = async (path: string, init?: RequestInit): Promise<Response> => {
   const response = await fetch(path, {
     ...init,
@@ -41,18 +53,12 @@ export const fetchBoard = async (): Promise<BoardData> => {
   const raw: RawBoardData = await response.json();
 
   const cards: Record<string, Card> = {};
-  for (const card of Object.values(raw.cards)) {
-    const id = toCardId(card.id);
-    cards[id] = { id, title: card.title, details: card.details };
+  for (const rawCard of Object.values(raw.cards)) {
+    const card = toCard(rawCard);
+    cards[card.id] = card;
   }
 
-  const columns: Column[] = raw.columns.map((column) => ({
-    id: toColumnId(column.id),
-    title: column.title,
-    cardIds: column.cardIds.map(toCardId),
-  }));
-
-  return { columns, cards };
+  return { columns: raw.columns.map(toColumn), cards };
 };
 
 export const renameColumn = async (columnId: string, title: string): Promise<Column> => {
@@ -60,8 +66,7 @@ export const renameColumn = async (columnId: string, title: string): Promise<Col
     method: "PATCH",
     body: JSON.stringify({ title }),
   });
-  const raw: RawColumn = await response.json();
-  return { id: toColumnId(raw.id), title: raw.title, cardIds: raw.cardIds.map(toCardId) };
+  return toColumn(await response.json());
 };
 
 export const createCard = async (
@@ -73,8 +78,7 @@ export const createCard = async (
     method: "POST",
     body: JSON.stringify({ column_id: fromColumnId(columnId), title, details }),
   });
-  const raw: RawCard = await response.json();
-  return { id: toCardId(raw.id), title: raw.title, details: raw.details };
+  return toCard(await response.json());
 };
 
 export const moveCard = async (
@@ -86,8 +90,7 @@ export const moveCard = async (
     method: "PATCH",
     body: JSON.stringify({ column_id: fromColumnId(columnId), position }),
   });
-  const raw: RawCard = await response.json();
-  return { id: toCardId(raw.id), title: raw.title, details: raw.details };
+  return toCard(await response.json());
 };
 
 export const deleteCard = async (cardId: string): Promise<void> => {

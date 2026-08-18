@@ -3,12 +3,14 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
+CREDENTIALS = {"username": "user", "password": "password"}
+
 
 @pytest.fixture
 def client():
     # `with` runs the lifespan hook, which is what creates and seeds the DB.
     with TestClient(app) as test_client:
-        test_client.post("/api/login", json={"username": "user", "password": "password"})
+        test_client.post("/api/login", json=CREDENTIALS)
         yield test_client
 
 
@@ -25,17 +27,17 @@ PROTECTED_ROUTES = [
 def test_board_routes_require_auth(method, path, body):
     """Every board route rejects unauthenticated callers, not just GET /api/board."""
     with TestClient(app) as test_client:
-        response = getattr(test_client, method)(path, **({"json": body} if body else {}))
+        response = test_client.request(method, path, json=body)
         assert response.status_code == 401
 
 
 def test_rejected_requests_do_not_mutate_the_board():
     with TestClient(app) as anon:
         for method, path, body in PROTECTED_ROUTES:
-            getattr(anon, method)(path, **({"json": body} if body else {}))
+            anon.request(method, path, json=body)
 
     with TestClient(app) as test_client:
-        test_client.post("/api/login", json={"username": "user", "password": "password"})
+        test_client.post("/api/login", json=CREDENTIALS)
         board = test_client.get("/api/board").json()
 
     assert board["columns"][0]["title"] == "Backlog"
@@ -58,7 +60,7 @@ def test_db_file_created_and_seeded_on_startup(db_path):
 
     with TestClient(app) as test_client:
         assert db_path.exists()
-        test_client.post("/api/login", json={"username": "user", "password": "password"})
+        test_client.post("/api/login", json=CREDENTIALS)
         response = test_client.get("/api/board")
 
     assert response.status_code == 200
@@ -68,12 +70,12 @@ def test_db_file_created_and_seeded_on_startup(db_path):
 def test_startup_does_not_reseed_existing_db(db_path):
     """A second startup against an existing DB preserves edits instead of re-seeding."""
     with TestClient(app) as test_client:
-        test_client.post("/api/login", json={"username": "user", "password": "password"})
+        test_client.post("/api/login", json=CREDENTIALS)
         column_id = test_client.get("/api/board").json()["columns"][0]["id"]
         test_client.patch(f"/api/columns/{column_id}", json={"title": "Renamed"})
 
     with TestClient(app) as test_client:
-        test_client.post("/api/login", json={"username": "user", "password": "password"})
+        test_client.post("/api/login", json=CREDENTIALS)
         board = test_client.get("/api/board").json()
 
     assert board["columns"][0]["title"] == "Renamed"

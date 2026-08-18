@@ -122,6 +122,14 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def get_db():
+    conn = connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     conn.commit()

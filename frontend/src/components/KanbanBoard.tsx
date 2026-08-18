@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -64,8 +64,6 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
     loadBoard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const cardsById = useMemo(() => board?.cards ?? {}, [board]);
 
   const handleMutationError = (error: unknown, previousBoard: BoardData) => {
     if (error instanceof UnauthorizedError) {
@@ -138,19 +136,22 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
     setActionError(null);
     try {
       const card = await createCardApi(columnId, title, details);
-      setBoard((prev) =>
-        prev
-          ? {
-              ...prev,
-              cards: { ...prev.cards, [card.id]: card },
-              columns: prev.columns.map((column) =>
-                column.id === columnId
-                  ? { ...column, cardIds: [...column.cardIds, card.id] }
-                  : column
-              ),
-            }
-          : prev
-      );
+      // Functional update, unlike the other handlers: the board may have been
+      // replaced (e.g. a chat-triggered refetch) while this request was in flight.
+      setBoard((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        return {
+          ...prev,
+          cards: { ...prev.cards, [card.id]: card },
+          columns: prev.columns.map((column) =>
+            column.id === columnId
+              ? { ...column, cardIds: [...column.cardIds, card.id] }
+              : column
+          ),
+        };
+      });
     } catch (error) {
       if (error instanceof UnauthorizedError) {
         onSessionExpired?.();
@@ -182,7 +183,7 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
     deleteCardApi(cardId).catch((error) => handleMutationError(error, previousBoard));
   };
 
-  const activeCard = activeCardId ? cardsById[activeCardId] : null;
+  const activeCard = activeCardId ? board?.cards[activeCardId] : null;
 
   return (
     <div className="relative overflow-hidden">

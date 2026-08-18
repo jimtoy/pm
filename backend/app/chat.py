@@ -18,7 +18,7 @@ from app.board import (
     get_board_id,
     parse_id,
 )
-from app.db import connect
+from app.db import get_db
 
 router = APIRouter(prefix="/api/ai", tags=["chat"], dependencies=[Depends(require_auth)])
 
@@ -116,14 +116,6 @@ RESPONSE_FORMAT = {
 }
 
 
-def get_db():
-    conn = connect()
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
 def _system_prompt(board: BoardData) -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(board_json=board.model_dump_json())
 
@@ -141,7 +133,6 @@ def _save_message(conn: sqlite3.Connection, board_id: int, role: str, content: s
         "INSERT INTO chat_messages (board_id, role, content) VALUES (?, ?, ?)",
         (board_id, role, content),
     )
-    conn.commit()
 
 
 # openai/gpt-oss-120b via OpenRouter doesn't reliably honor the JSON schema even with
@@ -177,15 +168,29 @@ def ask_structured(client: OpenAI, messages: list[dict[str, str]]) -> Structured
     ) from last_error
 
 
+def _require_title(operation: BoardOperation) -> str:
+    # The response schema allows a null title, and the model does return one; coercing
+    # it to "" would silently blank a real column or create an untitled card.
+    title = (operation.title or "").strip()
+    if not title:
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenRouter returned a '{operation.op}' operation with no title",
+        )
+    return title
+
+
 def apply_operations(conn: sqlite3.Connection, operations: list[BoardOperation]) -> None:
     for operation in operations:
         if operation.op == "rename_column":
-            apply_rename_column(conn, parse_id(operation.column_id or ""), operation.title or "")
+            apply_rename_column(
+                conn, parse_id(operation.column_id or ""), _require_title(operation)
+            )
         elif operation.op == "create_card":
             apply_create_card(
                 conn,
                 parse_id(operation.column_id or ""),
-                operation.title or "",
+                _require_title(operation),
                 operation.details or "",
             )
         elif operation.op == "update_card":
@@ -222,10 +227,15 @@ def chat(payload: ChatRequest, conn: sqlite3.Connection = Depends(get_db)) -> Ch
 
     structured = ask_structured(client, messages)
 
-    if structured.board_update:
-        apply_operations(conn, structured.board_update)
-
-    _save_message(conn, board_id, "user", payload.message)
-    _save_message(conn, board_id, "assistant", structured.reply)
+    # The turn is one transaction: an operation that fails partway through a batch
+    # must not leave the board half-mutated - see docs/code_review.md.
+    try:
+        apply_operations(conn, structured.board_update or [])
+        _save_message(conn, board_id, "user", payload.message)
+        _save_message(conn, board_id, "assistant", structured.reply)
+    except Exception:
+        conn.rollback()
+        raise
+    conn.commit()
 
     return ChatResponse(reply=structured.reply)

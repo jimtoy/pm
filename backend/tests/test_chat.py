@@ -1,46 +1,11 @@
 import json
 from contextlib import contextmanager
 
+import httpx
 from fastapi.testclient import TestClient
 from openai import APIConnectionError
 
-
-class FakeMessage:
-    def __init__(self, content):
-        self.content = content
-
-
-class FakeChoice:
-    def __init__(self, content):
-        self.message = FakeMessage(content)
-
-
-class FakeResponse:
-    def __init__(self, content):
-        self.choices = [FakeChoice(content)] if content is not None else []
-
-
-class FakeCompletions:
-    def __init__(self, contents=None, error=None):
-        self._contents = list(contents) if contents is not None else None
-        self._error = error
-        self.calls = []
-
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        if self._error is not None:
-            raise self._error
-        return FakeResponse(self._contents.pop(0))
-
-
-class FakeChat:
-    def __init__(self, completions):
-        self.completions = completions
-
-
-class FakeClient:
-    def __init__(self, contents=None, error=None):
-        self.chat = FakeChat(FakeCompletions(contents=contents, error=error))
+from tests.fakes import FakeClient
 
 
 @contextmanager
@@ -58,6 +23,23 @@ def logged_in_client(monkeypatch, contents=None, error=None):
 
 def _board(client: TestClient) -> dict:
     return client.get("/api/board").json()
+
+
+def _operation(op: str, **fields) -> dict:
+    """One board operation with every schema-required key present, as the model returns them."""
+    return {
+        "op": op,
+        "column_id": None,
+        "card_id": None,
+        "title": None,
+        "details": None,
+        "position": None,
+        **fields,
+    }
+
+
+def _reply(text: str, operations: list[dict] | None = None) -> str:
+    return json.dumps({"reply": text, "board_update": operations})
 
 
 def test_chat_requires_auth():
@@ -81,8 +63,7 @@ def test_messages_empty_before_any_chat(monkeypatch):
 
 
 def test_chat_returns_reply_with_no_board_update(monkeypatch):
-    reply_json = json.dumps({"reply": "Hello there", "board_update": None})
-    with logged_in_client(monkeypatch, contents=[reply_json]) as (client, fake):
+    with logged_in_client(monkeypatch, contents=[_reply("Hello there")]) as (client, fake):
         board_before = _board(client)
 
         response = client.post("/api/ai/chat", json={"message": "hi"})
@@ -102,16 +83,9 @@ def test_chat_applies_move_card_operation(monkeypatch):
     card_id = source_column["cardIds"][0]
 
     operations = [
-        {
-            "op": "update_card",
-            "column_id": dest_column["id"],
-            "card_id": card_id,
-            "title": None,
-            "details": None,
-            "position": 0,
-        }
+        _operation("update_card", column_id=dest_column["id"], card_id=card_id, position=0)
     ]
-    move_reply = json.dumps({"reply": "Moved it to Done", "board_update": operations})
+    move_reply = _reply("Moved it to Done", operations)
 
     with logged_in_client(monkeypatch, contents=[move_reply]) as (client, _fake):
         response = client.post("/api/ai/chat", json={"message": "move that card to Done"})
@@ -134,18 +108,18 @@ def test_chat_applies_create_card_operation(monkeypatch):
     column_id = board["columns"][0]["id"]
 
     operations = [
-        {
-            "op": "create_card",
-            "column_id": column_id,
-            "card_id": None,
-            "title": "New AI card",
-            "details": "created by the assistant",
-            "position": None,
-        }
+        _operation(
+            "create_card",
+            column_id=column_id,
+            title="New AI card",
+            details="created by the assistant",
+        )
     ]
-    reply_json = json.dumps({"reply": "Added it", "board_update": operations})
 
-    with logged_in_client(monkeypatch, contents=[reply_json]) as (client, _fake):
+    with logged_in_client(monkeypatch, contents=[_reply("Added it", operations)]) as (
+        client,
+        _fake,
+    ):
         response = client.post("/api/ai/chat", json={"message": "add a card"})
 
         assert response.status_code == 200
@@ -158,10 +132,9 @@ def test_chat_applies_create_card_operation(monkeypatch):
 
 
 def test_chat_persists_conversation_history(monkeypatch):
-    first_reply = json.dumps({"reply": "First reply", "board_update": None})
-    second_reply = json.dumps({"reply": "Second reply", "board_update": None})
+    contents = [_reply("First reply"), _reply("Second reply")]
 
-    with logged_in_client(monkeypatch, contents=[first_reply, second_reply]) as (client, fake):
+    with logged_in_client(monkeypatch, contents=contents) as (client, fake):
         client.post("/api/ai/chat", json={"message": "first message"})
         client.post("/api/ai/chat", json={"message": "second message"})
 
@@ -200,11 +173,8 @@ def test_chat_schema_violation_returns_502(monkeypatch):
 
 
 def test_chat_retries_and_succeeds_after_malformed_response(monkeypatch):
-    good_reply = json.dumps({"reply": "Recovered", "board_update": None})
-    with logged_in_client(monkeypatch, contents=["not json", "still not json", good_reply]) as (
-        client,
-        fake,
-    ):
+    contents = ["not json", "still not json", _reply("Recovered")]
+    with logged_in_client(monkeypatch, contents=contents) as (client, fake):
         response = client.post("/api/ai/chat", json={"message": "hi"})
 
         assert response.status_code == 200
@@ -212,9 +182,71 @@ def test_chat_retries_and_succeeds_after_malformed_response(monkeypatch):
         assert len(fake.chat.completions.calls) == 3
 
 
-def test_chat_surfaces_api_error(monkeypatch):
-    import httpx
+def test_chat_rejects_null_title_for_rename_column(monkeypatch):
+    with logged_in_client(monkeypatch) as (client, _fake):
+        board = _board(client)
+    column_id = board["columns"][0]["id"]
+    original_title = board["columns"][0]["title"]
 
+    operations = [_operation("rename_column", column_id=column_id, title=None)]
+
+    with logged_in_client(monkeypatch, contents=[_reply("Renamed it", operations)]) as (
+        client,
+        _fake,
+    ):
+        response = client.post("/api/ai/chat", json={"message": "rename the first column"})
+
+        assert response.status_code == 502
+        updated_board = _board(client)
+        assert updated_board["columns"][0]["title"] == original_title
+        # A failed turn persists neither side, matching other failure-path behavior.
+        assert client.get("/api/ai/messages").json() == []
+
+
+def test_chat_rejects_empty_title_for_create_card(monkeypatch):
+    with logged_in_client(monkeypatch) as (client, _fake):
+        board = _board(client)
+    column_id = board["columns"][0]["id"]
+    cards_before = len(board["cards"])
+
+    operations = [_operation("create_card", column_id=column_id, title="   ")]
+
+    with logged_in_client(monkeypatch, contents=[_reply("Added it", operations)]) as (
+        client,
+        _fake,
+    ):
+        response = client.post("/api/ai/chat", json={"message": "add an untitled card"})
+
+        assert response.status_code == 502
+        assert len(_board(client)["cards"]) == cards_before
+
+
+def test_chat_partial_batch_failure_rolls_back_all_operations(monkeypatch):
+    with logged_in_client(monkeypatch) as (client, _fake):
+        board_before = _board(client)
+    column_id = board_before["columns"][0]["id"]
+
+    # First operation is valid and would succeed on its own; second references a
+    # card id that doesn't exist. The whole batch must roll back, not just fail
+    # partway through with the first operation's mutation left committed.
+    operations = [
+        _operation("rename_column", column_id=column_id, title="Renamed by AI"),
+        _operation("delete_card", card_id="999999"),
+    ]
+
+    with logged_in_client(monkeypatch, contents=[_reply("Doing both", operations)]) as (
+        client,
+        _fake,
+    ):
+        response = client.post("/api/ai/chat", json={"message": "rename and delete"})
+
+        assert response.status_code == 404
+        updated_board = _board(client)
+        assert updated_board["columns"][0]["title"] == board_before["columns"][0]["title"]
+        assert client.get("/api/ai/messages").json() == []
+
+
+def test_chat_surfaces_api_error(monkeypatch):
     error = APIConnectionError(
         request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
     )

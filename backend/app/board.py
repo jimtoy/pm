@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import require_auth
-from app.db import connect
+from app.db import get_db
 
 router = APIRouter(prefix="/api", tags=["board"], dependencies=[Depends(require_auth)])
 
@@ -41,14 +41,6 @@ class UpdateCardRequest(BaseModel):
     details: str | None = None
     column_id: str | None = None
     position: int | None = None
-
-
-def get_db():
-    conn = connect()
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 
 def parse_id(raw_id: str) -> int:
@@ -104,9 +96,10 @@ def _move_card(
     source_ids = [
         cid for cid in _card_ids_in_column(conn, old_column_id) if cid != card_id
     ]
-    target_ids = source_ids if new_column_id == old_column_id else [
-        cid for cid in _card_ids_in_column(conn, new_column_id) if cid != card_id
-    ]
+    if new_column_id == old_column_id:
+        target_ids = source_ids
+    else:
+        target_ids = _card_ids_in_column(conn, new_column_id)
 
     insert_at = (
         len(target_ids) if new_position is None else max(0, min(new_position, len(target_ids)))
@@ -151,7 +144,6 @@ def get_board(conn: sqlite3.Connection) -> BoardData:
 def apply_rename_column(conn: sqlite3.Connection, column_id: int, title: str) -> Column:
     _require_column(conn, column_id)
     conn.execute("UPDATE board_columns SET title = ? WHERE id = ?", (title, column_id))
-    conn.commit()
     card_ids = [str(cid) for cid in _card_ids_in_column(conn, column_id)]
     return Column(id=str(column_id), title=title, cardIds=card_ids)
 
@@ -165,7 +157,6 @@ def apply_create_card(
         "INSERT INTO cards (column_id, title, details, position) VALUES (?, ?, ?, ?)",
         (column_id, title, details, position),
     )
-    conn.commit()
     return Card(id=str(cursor.lastrowid), title=title, details=details)
 
 
@@ -190,17 +181,13 @@ def apply_update_card(
         _require_column(conn, target_column_id)
         _move_card(conn, card_id, target_column_id, position)
 
-    conn.commit()
     return Card(id=str(card_id), title=final_title, details=final_details)
 
 
 def apply_delete_card(conn: sqlite3.Connection, card_id: int) -> None:
-    row = _require_card(conn, card_id)
-    column_id = row["column_id"]
+    column_id = _require_card(conn, card_id)["column_id"]
     conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
-    remaining_ids = [cid for cid in _card_ids_in_column(conn, column_id) if cid != card_id]
-    _renumber(conn, column_id, remaining_ids)
-    conn.commit()
+    _renumber(conn, column_id, _card_ids_in_column(conn, column_id))
 
 
 @router.get("/board")
@@ -212,14 +199,18 @@ def get_board_route(conn: sqlite3.Connection = Depends(get_db)) -> BoardData:
 def rename_column(
     column_id: str, payload: RenameColumnRequest, conn: sqlite3.Connection = Depends(get_db)
 ) -> Column:
-    return apply_rename_column(conn, parse_id(column_id), payload.title)
+    column = apply_rename_column(conn, parse_id(column_id), payload.title)
+    conn.commit()
+    return column
 
 
 @router.post("/cards")
 def create_card(
     payload: CreateCardRequest, conn: sqlite3.Connection = Depends(get_db)
 ) -> Card:
-    return apply_create_card(conn, parse_id(payload.column_id), payload.title, payload.details)
+    card = apply_create_card(conn, parse_id(payload.column_id), payload.title, payload.details)
+    conn.commit()
+    return card
 
 
 @router.patch("/cards/{card_id}")
@@ -227,7 +218,7 @@ def update_card(
     card_id: str, payload: UpdateCardRequest, conn: sqlite3.Connection = Depends(get_db)
 ) -> Card:
     column_id = parse_id(payload.column_id) if payload.column_id is not None else None
-    return apply_update_card(
+    card = apply_update_card(
         conn,
         parse_id(card_id),
         title=payload.title,
@@ -235,9 +226,12 @@ def update_card(
         column_id=column_id,
         position=payload.position,
     )
+    conn.commit()
+    return card
 
 
 @router.delete("/cards/{card_id}")
 def delete_card(card_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict[str, bool]:
     apply_delete_card(conn, parse_id(card_id))
+    conn.commit()
     return {"deleted": True}
