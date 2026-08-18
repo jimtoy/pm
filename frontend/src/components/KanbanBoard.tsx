@@ -65,13 +65,24 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleMutationError = (error: unknown, previousBoard: BoardData) => {
-    if (error instanceof UnauthorizedError) {
-      onSessionExpired?.();
-      return;
-    }
-    setBoard(previousBoard);
-    setActionError("Something went wrong saving that change. Please try again.");
+  // Rename, move and delete are optimistic: show `nextBoard` immediately, save
+  // in the background, and roll back to `previousBoard` on failure. A 401 means
+  // the session expired, so it redirects instead of showing an error banner.
+  const applyOptimisticUpdate = (
+    previousBoard: BoardData,
+    nextBoard: BoardData,
+    save: () => Promise<unknown>
+  ) => {
+    setActionError(null);
+    setBoard(nextBoard);
+    save().catch((error) => {
+      if (error instanceof UnauthorizedError) {
+        onSessionExpired?.();
+        return;
+      }
+      setBoard(previousBoard);
+      setActionError("Something went wrong saving that change. Please try again.");
+    });
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -90,24 +101,20 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
       return;
     }
 
-    const previousBoard = board;
-    const nextColumns = moveCard(board.columns, active.id as string, over.id as string);
+    const cardId = active.id as string;
+    const nextColumns = moveCard(board.columns, cardId, over.id as string);
     if (nextColumns === board.columns) {
       return;
     }
 
-    const cardId = active.id as string;
     const targetColumn = nextColumns.find((column) => column.cardIds.includes(cardId));
     if (!targetColumn) {
       return;
     }
     const position = targetColumn.cardIds.indexOf(cardId);
 
-    setActionError(null);
-    setBoard({ ...board, columns: nextColumns });
-
-    moveCardApi(cardId, targetColumn.id, position).catch((error) =>
-      handleMutationError(error, previousBoard)
+    applyOptimisticUpdate(board, { ...board, columns: nextColumns }, () =>
+      moveCardApi(cardId, targetColumn.id, position)
     );
   };
 
@@ -115,17 +122,12 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
     if (!board) {
       return;
     }
-    const previousBoard = board;
-    setActionError(null);
-    setBoard({
-      ...board,
-      columns: board.columns.map((column) =>
-        column.id === columnId ? { ...column, title } : column
-      ),
-    });
+    const nextColumns = board.columns.map((column) =>
+      column.id === columnId ? { ...column, title } : column
+    );
 
-    renameColumnApi(columnId, title).catch((error) =>
-      handleMutationError(error, previousBoard)
+    applyOptimisticUpdate(board, { ...board, columns: nextColumns }, () =>
+      renameColumnApi(columnId, title)
     );
   };
 
@@ -166,21 +168,16 @@ export const KanbanBoard = ({ onLogout, onSessionExpired }: KanbanBoardProps) =>
     if (!board) {
       return;
     }
-    const previousBoard = board;
-    setActionError(null);
-    setBoard({
-      ...board,
-      cards: Object.fromEntries(
-        Object.entries(board.cards).filter(([id]) => id !== cardId)
-      ),
-      columns: board.columns.map((column) =>
-        column.id === columnId
-          ? { ...column, cardIds: column.cardIds.filter((id) => id !== cardId) }
-          : column
-      ),
-    });
+    const remainingCards = { ...board.cards };
+    delete remainingCards[cardId];
+    const nextColumns = board.columns.map((column) =>
+      column.id === columnId
+        ? { ...column, cardIds: column.cardIds.filter((id) => id !== cardId) }
+        : column
+    );
 
-    deleteCardApi(cardId).catch((error) => handleMutationError(error, previousBoard));
+    const nextBoard = { ...board, cards: remainingCards, columns: nextColumns };
+    applyOptimisticUpdate(board, nextBoard, () => deleteCardApi(cardId));
   };
 
   const activeCard = activeCardId ? board?.cards[activeCardId] : null;

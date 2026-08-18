@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from openai import APIConnectionError
 
 from app.ai import MODEL, ask
+from app.main import app
 from tests.fakes import FakeClient
 
 CONNECTION_ERROR = APIConnectionError(
@@ -13,8 +14,6 @@ CONNECTION_ERROR = APIConnectionError(
 
 
 def _logged_in_client() -> TestClient:
-    from app.main import app
-
     client = TestClient(app)
     client.post("/api/login", json={"username": "user", "password": "password"})
     return client
@@ -50,10 +49,7 @@ def test_ask_raises_502_on_empty_response():
 
 
 def test_ping_requires_auth():
-    from app.main import app
-
-    client = TestClient(app)
-    response = client.get("/api/ai/ping")
+    response = TestClient(app).get("/api/ai/ping")
     assert response.status_code == 401
 
 

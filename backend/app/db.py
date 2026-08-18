@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
@@ -45,69 +46,41 @@ SEED_COLUMNS = [
     (
         "Backlog",
         [
-            (
-                "Align roadmap themes",
-                "Draft quarterly themes with impact statements and metrics.",
-            ),
-            (
-                "Gather customer signals",
-                "Review support tags, sales notes, and churn feedback.",
-            ),
+            ("Align roadmap themes", "Draft quarterly themes with impact statements and metrics."),
+            ("Gather customer signals", "Review support tags, sales notes, and churn feedback."),
         ],
     ),
     (
         "Discovery",
         [
-            (
-                "Prototype analytics view",
-                "Sketch initial dashboard layout and key drill-downs.",
-            ),
+            ("Prototype analytics view", "Sketch initial dashboard layout and key drill-downs."),
         ],
     ),
     (
         "In Progress",
         [
-            (
-                "Refine status language",
-                "Standardize column labels and tone across the board.",
-            ),
-            (
-                "Design card layout",
-                "Add hierarchy and spacing for scanning dense lists.",
-            ),
+            ("Refine status language", "Standardize column labels and tone across the board."),
+            ("Design card layout", "Add hierarchy and spacing for scanning dense lists."),
         ],
     ),
     (
         "Review",
         [
-            (
-                "QA micro-interactions",
-                "Verify hover, focus, and loading states.",
-            ),
+            ("QA micro-interactions", "Verify hover, focus, and loading states."),
         ],
     ),
     (
         "Done",
         [
-            (
-                "Ship marketing page",
-                "Final copy approved and asset pack delivered.",
-            ),
-            (
-                "Close onboarding sprint",
-                "Document release notes and share internally.",
-            ),
+            ("Ship marketing page", "Final copy approved and asset pack delivered."),
+            ("Close onboarding sprint", "Document release notes and share internally."),
         ],
     ),
 ]
 
 
-def get_db_path() -> Path:
-    return Path(os.environ.get("DB_PATH", DEFAULT_DB_PATH))
-
-
-def connect(db_path: Path | None = None) -> sqlite3.Connection:
-    path = db_path or get_db_path()
+def connect() -> sqlite3.Connection:
+    path = Path(os.environ.get("DB_PATH", DEFAULT_DB_PATH))
     path.parent.mkdir(parents=True, exist_ok=True)
     # FastAPI dispatches a sync generator dependency's setup, the endpoint
     # body, and its teardown as separate run_in_threadpool calls, each of
@@ -122,7 +95,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
-def get_db():
+def get_db() -> Iterator[sqlite3.Connection]:
     conn = connect()
     try:
         yield conn

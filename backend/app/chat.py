@@ -9,7 +9,6 @@ from pydantic import BaseModel, ValidationError
 from app.ai import MODEL, get_client
 from app.auth import require_auth
 from app.board import (
-    BoardData,
     apply_create_card,
     apply_delete_card,
     apply_rename_column,
@@ -116,10 +115,6 @@ RESPONSE_FORMAT = {
 }
 
 
-def _system_prompt(board: BoardData) -> str:
-    return SYSTEM_PROMPT_TEMPLATE.format(board_json=board.model_dump_json())
-
-
 def _load_history(conn: sqlite3.Connection, board_id: int) -> list[ChatMessage]:
     rows = conn.execute(
         "SELECT role, content FROM chat_messages WHERE board_id = ? ORDER BY id",
@@ -144,7 +139,7 @@ MAX_STRUCTURED_ATTEMPTS = 3
 
 def ask_structured(client: OpenAI, messages: list[dict[str, str]]) -> StructuredReply:
     last_error: Exception | None = None
-    for _attempt in range(MAX_STRUCTURED_ATTEMPTS):
+    for _ in range(MAX_STRUCTURED_ATTEMPTS):
         try:
             response = client.chat.completions.create(
                 model=MODEL, messages=messages, response_format=RESPONSE_FORMAT
@@ -154,10 +149,10 @@ def ask_structured(client: OpenAI, messages: list[dict[str, str]]) -> Structured
                 status_code=502, detail=f"OpenRouter request failed: {exc}"
             ) from exc
 
-        if not response.choices or not response.choices[0].message.content:
+        content = response.choices[0].message.content if response.choices else None
+        if not content:
             raise HTTPException(status_code=502, detail="OpenRouter returned an empty response")
 
-        content = response.choices[0].message.content
         try:
             return StructuredReply.model_validate(json.loads(content))
         except (json.JSONDecodeError, ValidationError) as exc:
@@ -217,15 +212,14 @@ def chat(payload: ChatRequest, conn: sqlite3.Connection = Depends(get_db)) -> Ch
         raise HTTPException(status_code=400, detail="message is required")
 
     board_id = get_board_id(conn)
-    history = _load_history(conn, board_id)
-    board = get_board(conn)
+    board_json = get_board(conn).model_dump_json()
 
-    client = get_client()
-    messages = [{"role": "system", "content": _system_prompt(board)}]
-    messages += [{"role": m.role, "content": m.content} for m in history]
-    messages.append({"role": "user", "content": payload.message})
-
-    structured = ask_structured(client, messages)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(board_json=board_json)},
+        *({"role": m.role, "content": m.content} for m in _load_history(conn, board_id)),
+        {"role": "user", "content": payload.message},
+    ]
+    structured = ask_structured(get_client(), messages)
 
     # The turn is one transaction: an operation that fails partway through a batch
     # must not leave the board half-mutated - see docs/code_review.md.

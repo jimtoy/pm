@@ -1,26 +1,30 @@
 import { useState, type FormEvent } from "react";
 
-const initialFormState = { title: "", details: "" };
-
 type NewCardFormProps = {
   onAdd: (title: string, details: string) => Promise<void> | void;
 };
 
 export const NewCardForm = ({ onAdd }: NewCardFormProps) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [formState, setFormState] = useState(initialFormState);
+  const [title, setTitle] = useState("");
+  const [details, setDetails] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const closeForm = () => {
+    setIsOpen(false);
+    setTitle("");
+    setDetails("");
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!formState.title.trim()) {
+    if (!title.trim()) {
       return;
     }
     setSubmitting(true);
     try {
-      await onAdd(formState.title.trim(), formState.details.trim());
-      setFormState(initialFormState);
-      setIsOpen(false);
+      await onAdd(title.trim(), details.trim());
+      closeForm();
     } catch {
       // Keep the form open with the user's input so they can retry.
     } finally {
@@ -33,19 +37,15 @@ export const NewCardForm = ({ onAdd }: NewCardFormProps) => {
       {isOpen ? (
         <form onSubmit={handleSubmit} className="space-y-3">
           <input
-            value={formState.title}
-            onChange={(event) =>
-              setFormState((prev) => ({ ...prev, title: event.target.value }))
-            }
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
             placeholder="Card title"
             className="w-full rounded-xl border border-[var(--stroke)] bg-white px-3 py-2 text-sm font-medium text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
             required
           />
           <textarea
-            value={formState.details}
-            onChange={(event) =>
-              setFormState((prev) => ({ ...prev, details: event.target.value }))
-            }
+            value={details}
+            onChange={(event) => setDetails(event.target.value)}
             placeholder="Details"
             rows={3}
             className="w-full resize-none rounded-xl border border-[var(--stroke)] bg-white px-3 py-2 text-sm text-[var(--gray-text)] outline-none transition focus:border-[var(--primary-blue)]"
@@ -60,10 +60,7 @@ export const NewCardForm = ({ onAdd }: NewCardFormProps) => {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setIsOpen(false);
-                setFormState(initialFormState);
-              }}
+              onClick={closeForm}
               className="rounded-full border border-[var(--stroke)] px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
             >
               Cancel

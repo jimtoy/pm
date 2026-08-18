@@ -25,15 +25,16 @@ const rawBoard = {
 const jsonResponse = (body: unknown) =>
   ({ ok: true, status: 200, json: async () => body }) as Response;
 
-const mockFetch = () => fetch as ReturnType<typeof vi.fn>;
+let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn());
+  fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 describe("fetchBoard", () => {
   it("prefixes column and card ids so they never collide", async () => {
-    mockFetch().mockResolvedValueOnce(jsonResponse(rawBoard));
+    fetchMock.mockResolvedValueOnce(jsonResponse(rawBoard));
 
     const board = await fetchBoard();
 
@@ -54,44 +55,44 @@ describe("fetchBoard", () => {
 
 describe("mutation functions strip prefixes before calling the API", () => {
   it("renameColumn", async () => {
-    mockFetch().mockResolvedValueOnce(
+    fetchMock.mockResolvedValueOnce(
       jsonResponse({ id: "3", title: "Renamed", cardIds: ["4", "5"] })
     );
 
     await renameColumn("col-3", "Renamed");
 
-    expect(mockFetch()).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledWith(
       "/api/columns/3",
       expect.objectContaining({ method: "PATCH" })
     );
   });
 
   it("createCard", async () => {
-    mockFetch().mockResolvedValueOnce(jsonResponse({ id: "9", title: "New", details: "" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: "9", title: "New", details: "" }));
 
     const card = await createCard("col-3", "New", "");
 
-    const [, init] = mockFetch().mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body).column_id).toBe("3");
     expect(card.id).toBe("card-9");
   });
 
   it("moveCard", async () => {
-    mockFetch().mockResolvedValueOnce(jsonResponse({ id: "3", title: "x", details: "" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: "3", title: "x", details: "" }));
 
     await moveCard("card-3", "col-1", 0);
 
-    const [url, init] = mockFetch().mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/cards/3");
     expect(JSON.parse(init.body).column_id).toBe("1");
   });
 
   it("deleteCard", async () => {
-    mockFetch().mockResolvedValueOnce(jsonResponse({}));
+    fetchMock.mockResolvedValueOnce(jsonResponse({}));
 
     await deleteCard("card-3");
 
-    expect(mockFetch()).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledWith(
       "/api/cards/3",
       expect.objectContaining({ method: "DELETE" })
     );

@@ -1,4 +1,4 @@
-export type SessionResponse = { authenticated: boolean };
+type SessionResponse = { authenticated: boolean };
 
 export async function fetchSession(): Promise<boolean> {
   const response = await fetch("/api/session");

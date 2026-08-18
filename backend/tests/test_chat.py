@@ -5,14 +5,13 @@ import httpx
 from fastapi.testclient import TestClient
 from openai import APIConnectionError
 
+from app.main import app
 from tests.fakes import FakeClient
 
 
 @contextmanager
 def logged_in_client(monkeypatch, contents=None, error=None):
     """A TestClient with lifespan (DB init + seed) run, logged in, and a fake AI client wired in."""
-    from app.main import app
-
     fake = FakeClient(contents=contents, error=error)
     monkeypatch.setattr("app.chat.get_client", lambda: fake)
 
@@ -43,8 +42,6 @@ def _reply(text: str, operations: list[dict] | None = None) -> str:
 
 
 def test_chat_requires_auth():
-    from app.main import app
-
     with TestClient(app) as client:
         response = client.post("/api/ai/chat", json={"message": "hi"})
         assert response.status_code == 401

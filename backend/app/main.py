@@ -1,5 +1,5 @@
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,11 +21,8 @@ STATIC_DIR = Path(os.environ.get("STATIC_DIR", DEFAULT_STATIC_DIR))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    conn = connect()
-    try:
+    with closing(connect()) as conn:
         init_db(conn)
-    finally:
-        conn.close()
     yield
 
 

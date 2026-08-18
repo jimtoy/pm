@@ -58,9 +58,8 @@ def get_board_id(conn: sqlite3.Connection) -> int:
 
 
 def _require_column(conn: sqlite3.Connection, column_id: int) -> None:
-    if conn.execute(
-        "SELECT 1 FROM board_columns WHERE id = ?", (column_id,)
-    ).fetchone() is None:
+    row = conn.execute("SELECT 1 FROM board_columns WHERE id = ?", (column_id,)).fetchone()
+    if row is None:
         raise HTTPException(status_code=404, detail="Column not found")
 
 
@@ -93,17 +92,16 @@ def _move_card(
 ) -> None:
     old_column_id = _require_card(conn, card_id)["column_id"]
 
-    source_ids = [
-        cid for cid in _card_ids_in_column(conn, old_column_id) if cid != card_id
-    ]
+    source_ids = [cid for cid in _card_ids_in_column(conn, old_column_id) if cid != card_id]
     if new_column_id == old_column_id:
         target_ids = source_ids
     else:
         target_ids = _card_ids_in_column(conn, new_column_id)
 
-    insert_at = (
-        len(target_ids) if new_position is None else max(0, min(new_position, len(target_ids)))
-    )
+    if new_position is None:
+        insert_at = len(target_ids)
+    else:
+        insert_at = max(0, min(new_position, len(target_ids)))
     target_ids.insert(insert_at, card_id)
 
     if new_column_id != old_column_id:
@@ -111,34 +109,31 @@ def _move_card(
     _renumber(conn, new_column_id, target_ids)
 
 
-def _to_card(row: sqlite3.Row) -> Card:
-    return Card(id=str(row["id"]), title=row["title"], details=row["details"])
-
-
 def get_board(conn: sqlite3.Connection) -> BoardData:
     board_id = get_board_id(conn)
-    columns = conn.execute(
+    column_rows = conn.execute(
         "SELECT id, title FROM board_columns WHERE board_id = ? ORDER BY position",
         (board_id,),
     ).fetchall()
 
-    result_columns = []
+    columns: list[Column] = []
     cards: dict[str, Card] = {}
-    for column in columns:
-        card_rows = conn.execute(
+    for column_row in column_rows:
+        card_ids: list[str] = []
+        for card_row in conn.execute(
             "SELECT id, title, details FROM cards WHERE column_id = ? ORDER BY position",
-            (column["id"],),
-        ).fetchall()
-        card_ids = []
-        for card_row in card_rows:
-            card = _to_card(card_row)
+            (column_row["id"],),
+        ).fetchall():
+            card = Card(
+                id=str(card_row["id"]), title=card_row["title"], details=card_row["details"]
+            )
             cards[card.id] = card
             card_ids.append(card.id)
-        result_columns.append(
-            Column(id=str(column["id"]), title=column["title"], cardIds=card_ids)
+        columns.append(
+            Column(id=str(column_row["id"]), title=column_row["title"], cardIds=card_ids)
         )
 
-    return BoardData(columns=result_columns, cards=cards)
+    return BoardData(columns=columns, cards=cards)
 
 
 def apply_rename_column(conn: sqlite3.Connection, column_id: int, title: str) -> Column:

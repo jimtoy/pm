@@ -11,13 +11,16 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("LoginPage", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     replace.mockClear();
-    vi.stubGlobal("fetch", vi.fn());
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
   });
 
   it("redirects to / when already authenticated", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ authenticated: true }),
     });
@@ -28,7 +31,7 @@ describe("LoginPage", () => {
   });
 
   it("shows an error for invalid credentials", async () => {
-    (fetch as ReturnType<typeof vi.fn>)
+    fetchMock
       .mockResolvedValueOnce({ ok: true, json: async () => ({ authenticated: false }) })
       .mockResolvedValueOnce({ ok: false });
 
@@ -44,7 +47,7 @@ describe("LoginPage", () => {
   });
 
   it("redirects to / after a successful login", async () => {
-    (fetch as ReturnType<typeof vi.fn>)
+    fetchMock
       .mockResolvedValueOnce({ ok: true, json: async () => ({ authenticated: false }) })
       .mockResolvedValueOnce({ ok: true });
 

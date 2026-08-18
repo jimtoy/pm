@@ -10,13 +10,16 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("Home", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     replace.mockClear();
-    vi.stubGlobal("fetch", vi.fn());
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
   });
 
   it("redirects to /login when not authenticated", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ authenticated: false }),
     });
@@ -28,7 +31,7 @@ describe("Home", () => {
   });
 
   it("renders the board when authenticated", async () => {
-    (fetch as ReturnType<typeof vi.fn>)
+    fetchMock
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ authenticated: true }),

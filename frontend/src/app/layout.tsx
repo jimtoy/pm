@@ -17,11 +17,7 @@ export const metadata: Metadata = {
   description: "A focused, single-board kanban workspace.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className={`${displayFont.variable} ${bodyFont.variable}`}>

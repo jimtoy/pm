@@ -27,10 +27,11 @@ def ask(client: OpenAI, prompt: str) -> str:
     except APIError as exc:
         raise HTTPException(status_code=502, detail=f"OpenRouter request failed: {exc}") from exc
 
-    if not response.choices or not response.choices[0].message.content:
+    content = response.choices[0].message.content if response.choices else None
+    if not content:
         raise HTTPException(status_code=502, detail="OpenRouter returned an empty response")
 
-    return response.choices[0].message.content
+    return content
 
 
 @router.get("/ping")
